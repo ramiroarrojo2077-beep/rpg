@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ecos del Vacío — Kether-3</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #05070a; overflow: hidden; }
+  body { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #e8e2d6; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="app"><canvas id="gl"></canvas></div>
+<script src="src/00-math.js"></script>
+<script src="src/10-gl.js"></script>
+<script src="src/20-noise.js"></script>
+<script src="src/30-shaders.js"></script>
+<script src="src/40-sky.js"></script>
+<script src="src/45-terrain.js"></script>
+<script src="src/50-geometry.js"></script>
+<script src="src/52-props.js"></script>
+<script src="src/60-shaders-geo.js"></script>
+<script src="src/62-shaders-post.js"></script>
+<script src="src/70-renderer.js"></script>
+<script src="src/72-titan.js"></script>
+<script src="src/74-player.js"></script>
+<script src="src/80-audio.js"></script>
+<script src="src/85-hud.js"></script>
+<script src="src/90-game.js"></script>
+<script src="src/99-main.js"></script>
+</body>
+</html>

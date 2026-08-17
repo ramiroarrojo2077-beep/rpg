@@ -54,7 +54,28 @@ enfrentar lo que viene después.
 | [12 — UX, UI y accesibilidad](docs/12-ux-ui-y-accesibilidad.md) | HUD diegético, legibilidad en combate, accesibilidad |
 | [13 — Producción y riesgos](docs/13-produccion-y-riesgos.md) | Alcance, fases, equipo, riesgos y mitigaciones |
 
+## Vertical slice jugable
+
+`game/` contiene una implementación **jugable y verificada** del primer
+encuentro: Kether-3, el despliegue de la antena y la caza de El Barrenador.
+Motor propio en WebGL2, sin dependencias ni assets — terreno, criaturas, cielo y
+audio se generan en tiempo de ejecución.
+
+```bash
+cd game && npx http-server -p 8080 .
+```
+
+O el archivo único: `game/dist/ecos-del-vacio.html`.
+
+Implementa la cadena causal sin marcadores, el calor como recurso único, el
+titán como terreno escalable por anclajes, y el clima con consecuencia mecánica.
+El pipeline de render (sombras en cascada, PBR con IBL atmosférico, SSAO,
+volumétricos con prueba de sombra, bloom, TAA y cadena de cámara con ACES) está
+documentado en [`game/README.md`](game/README.md). 28 pruebas automatizadas
+cubren el bucle de misión completo.
+
 ## Estado
 
-Documento de diseño en desarrollo. No hay código de motor en este repositorio
-todavía; esto es la especificación de la que sale la vertical slice.
+Documentos de diseño completos. Vertical slice en el navegador funcionando. El
+juego descrito en los documentos —UE5, fotorrealismo, seis planetas— es un
+proyecto de otra escala; ver [13 — Producción y riesgos](docs/13-produccion-y-riesgos.md).
