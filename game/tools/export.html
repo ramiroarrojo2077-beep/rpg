@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Exportador — Ecos del Vacío</title></head>
+<body style="background:#0a0b0d;color:#e8e2d6;font-family:ui-monospace,monospace;padding:24px">
+<h1 style="font-size:15px;letter-spacing:3px;font-weight:400">EXPORTADOR DE PERSONAJES</h1>
+<div id="log" style="font-size:12px;opacity:.7;line-height:1.9"></div>
+<canvas id="gl" width="16" height="16" style="display:none"></canvas>
+<script src="../src/00-math.js"></script>
+<script src="../src/05-quat.js"></script>
+<script src="../src/10-gl.js"></script>
+<script src="../src/20-noise.js"></script>
+<script src="../src/30-shaders.js"></script>
+<script src="../src/48-anim.js"></script>
+<script src="../src/49-charmesh.js"></script>
+<script src="../src/51-characters.js"></script>
+<script src="gltf-exporter.js"></script>
+<script>
+// El generador de malla no necesita GPU para producir los arreglos, pero el
+// módulo GL se inicializa igual para mantener un único camino de código.
+try { EV.GL.init(document.getElementById('gl')); } catch (e) { /* sin GPU: da igual */ }
+window.EV_EXPORT_READY = true;
+window.EV_EXPORT = (style) => {
+  const r = EV.Export.toGLB(style);
+  // fromCharCode.apply desborda la pila con cientos de miles de bytes:
+  // hay que ir por bloques.
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < r.bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, r.bytes.subarray(i, i + CHUNK));
+  }
+  return { stats: r.stats, base64: btoa(bin) };
+};
+document.getElementById('log').textContent =
+  'Listo. Estilos: ' + Object.keys(EV.Characters.STYLES).join(', ');
+</script>
+</body></html>

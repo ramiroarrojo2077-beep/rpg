@@ -11,13 +11,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 // chunk en EV.Shaders, que define 30-shaders).
 const ORDER = [
   '00-math.js',
+  '05-quat.js',
   '10-gl.js',
   '20-noise.js',
   '30-shaders.js',
   '40-sky.js',
   '45-terrain.js',
+  '48-anim.js',
+  '49-charmesh.js',
   '50-geometry.js',
+  '51-characters.js',
   '52-props.js',
+  '56-particles.js',
   '60-shaders-geo.js',
   '62-shaders-post.js',
   '70-renderer.js',

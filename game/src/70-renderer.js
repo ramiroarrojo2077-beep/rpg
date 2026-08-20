@@ -18,12 +18,13 @@
 
   // Presets de calidad. Todo lo que cuesta milisegundos es un define de shader,
   // así que bajar calidad recompila más barato en vez de ramificar en runtime.
+  const MAX_LIGHTS = 8;
   const PRESETS = {
-    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2 },
-    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2 },
-    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2 },
-    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4 },
-    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4 },
+    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2, contact: 1 },
+    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2, contact: 1 },
+    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2, contact: 1 },
+    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4, contact: 0 },
+    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4, contact: 0 },
   };
 
   // Secuencia de Halton para el jitter subpíxel del TAA.
@@ -65,6 +66,7 @@ void main(){
       SHADOW_TAPS: Q.shadowTaps,
       SSAO_SAMPLES: Q.ssaoSamples,
       VOL_STEPS: Q.volSteps,
+      MAX_LIGHTS: MAX_LIGHTS,
     };
     const mk = (vs, fs, label, def) => G.program(vs, fs, label, Object.assign({}, COST, def || {}));
     const prog = {
@@ -79,6 +81,10 @@ void main(){
       mainTerrain: mk(GS.GEO_VS, GS.MAIN_FS, 'main.terrain', { TERRAIN: 1 }),
       mainInst: mk(GS.GEO_VS, GS.MAIN_FS, 'main.inst', { INSTANCED: 1 }),
       mainNode: mk(GS.GEO_VS, GS.MAIN_FS, 'main.node', { NODE: 1 }),
+
+      shadowSkinned: mk(GS.GEO_VS, GS.SHADOW_FS, 'shadow.skinned', { SKINNED: 1 }),
+      prepassSkinned: mk(GS.GEO_VS, GS.PREPASS_FS, 'prepass.skinned', { SKINNED: 1 }),
+      mainSkinned: mk(GS.GEO_VS, GS.MAIN_FS, 'main.skinned', { SKINNED: 1 }),
 
       skybox: mk(GS.SKYBOX_VS, GS.SKYBOX_FS, 'skybox'),
       ssao: mk(PS.FS_VS, PS.SSAO_FS, 'ssao'),
@@ -183,7 +189,29 @@ void main(){
     const _center = EV.V3.create();
     const _eye = EV.V3.create();
     const UP = EV.V3.create(0, 1, 0);
+    const camRight = EV.V3.create(1, 0, 0);
+    const camUp = EV.V3.create(0, 1, 0);
     const ALT_UP = EV.V3.create(0, 0, 1);
+
+    // Luces puntuales empaquetadas para subir de una sola vez.
+    const lightPos = new Float32Array(MAX_LIGHTS * 4);
+    const lightColor = new Float32Array(MAX_LIGHTS * 4);
+    let lightCount = 0;
+
+    function packLights(lights) {
+      lightCount = 0;
+      if (!lights) return;
+      for (const l of lights) {
+        if (lightCount >= MAX_LIGHTS) break;
+        if (!l || l.intensity <= 0) continue;
+        const o = lightCount * 4;
+        lightPos[o] = l.pos[0]; lightPos[o + 1] = l.pos[1]; lightPos[o + 2] = l.pos[2];
+        lightPos[o + 3] = l.radius;
+        lightColor[o] = l.color[0]; lightColor[o + 1] = l.color[1]; lightColor[o + 2] = l.color[2];
+        lightColor[o + 3] = l.intensity;
+        lightCount++;
+      }
+    }
 
     let frame = 0;
     let historyIndex = 0;
@@ -259,6 +287,26 @@ void main(){
       }
     }
 
+    // Cada personaje es una llamada de dibujo: su textura de huesos y su
+    // paleta son lo único que cambia entre uno y otro.
+    function drawCharacters(P, characters, withMaterial) {
+      if (!characters) return;
+      for (const c of characters) {
+        if (!c.visible) continue;
+        U.tex(P, 'uBoneTex', 6, c.skin.boneTex);
+        U.tex(P, 'uPrevBoneTex', 7, c.skin.prevBoneTex);
+        if (withMaterial) {
+          const pal = c.palette;
+          U.v3f(P, 'uSuitColor', pal.suit[0], pal.suit[1], pal.suit[2]);
+          U.v3f(P, 'uArmorColor', pal.armor[0], pal.armor[1], pal.armor[2]);
+          U.v3f(P, 'uAccentColor', pal.accent[0], pal.accent[1], pal.accent[2]);
+          U.f(P, 'uWear', c.wear === undefined ? 0.45 : c.wear);
+          U.f(P, 'uEmissivePulse', c.pulse === undefined ? 1 : c.pulse);
+        }
+        c.mesh.draw();
+      }
+    }
+
     function setGeoCommon(P, scene) {
       U.m4(P, 'uViewProj', viewProj);
       U.m4(P, 'uViewProjNoJit', viewProjNoJit);
@@ -290,6 +338,11 @@ void main(){
       EV.M4.invert(invProj, projNoJit);
       if (needsHistoryReset) EV.M4.copy(prevViewProjNoJit, viewProjNoJit);
 
+      // Ejes de pantalla, para orientar los billboards de partículas.
+      camRight[0] = view[0]; camRight[1] = view[4]; camRight[2] = view[8];
+      camUp[0] = view[1]; camUp[1] = view[5]; camUp[2] = view[9];
+
+      packLights(scene.lights);
       sky.update(cam.pos[1]);
       fitCascades(cam, sky.sunDir);
 
@@ -324,6 +377,8 @@ void main(){
         scene.props.draw();
         setShadow(prog.shadowNode);
         drawNodes(prog.shadowNode, scene.nodes, false);
+        setShadow(prog.shadowSkinned);
+        drawCharacters(prog.shadowSkinned, scene.characters, false);
       }
       gl.cullFace(gl.BACK);
 
@@ -346,10 +401,16 @@ void main(){
       scene.props.draw('crystal');
       U.i(prog.prepassInst, 'uPropType', 1);
       scene.props.draw('debris');
+      U.i(prog.prepassInst, 'uPropType', 2);
+      scene.props.draw('rock');
 
       gl.useProgram(prog.prepassNode.prog);
       setGeoCommon(prog.prepassNode, scene);
       drawNodes(prog.prepassNode, scene.nodes, true);
+
+      gl.useProgram(prog.prepassSkinned.prog);
+      setGeoCommon(prog.prepassSkinned, scene);
+      drawCharacters(prog.prepassSkinned, scene.characters, true);
 
       // ------------------------------------------------------------- 3. SSAO
       gl.disable(gl.DEPTH_TEST);
@@ -423,6 +484,15 @@ void main(){
         U.v3(P, 'uSunRadiance', sky.sunRadiance);
         U.f(P, 'uFogDensity', scene.fogDensity);
         U.f(P, 'uExposureComp', 1.0);
+        // Sombra de contacto: marcha contra la profundidad de media resolución
+        // (no contra la textura adjunta al FBO, que sería realimentación).
+        U.tex(P, 'uDepthHalf', 4, fb.depthHalf.tex);
+        U.m4(P, 'uViewProjNoJitFS', viewProjNoJit);
+        U.m4(P, 'uInvViewProjFS', invViewProj);
+        U.f(P, 'uContactShadow', Q.contact ? 1.0 : 0.0);
+        U.i(P, 'uLightCount', lightCount);
+        if (P.u.uLightPos) gl.uniform4fv(P.u.uLightPos, lightPos);
+        if (P.u.uLightColor) gl.uniform4fv(P.u.uLightColor, lightColor);
       };
 
       gl.useProgram(prog.mainTerrain.prog);
@@ -436,10 +506,30 @@ void main(){
       scene.props.draw('crystal');
       U.i(prog.mainInst, 'uPropType', 1);
       scene.props.draw('debris');
+      U.i(prog.mainInst, 'uPropType', 2);
+      scene.props.draw('rock');
 
       gl.useProgram(prog.mainNode.prog);
       bindLighting(prog.mainNode);
       drawNodes(prog.mainNode, scene.nodes, true);
+
+      gl.useProgram(prog.mainSkinned.prog);
+      bindLighting(prog.mainSkinned);
+      drawCharacters(prog.mainSkinned, scene.characters, true);
+
+      // Partículas dentro del búfer de escena: así la niebla volumétrica y la
+      // perspectiva aérea del pase siguiente también actúan sobre ellas.
+      if (scene.particles) {
+        scene.particles.draw({
+          viewProj, camRight, camUp,
+          depthTex: fb.depthHalf.tex,
+          width: W, height: H,
+          near: cam.near, far: cam.far,
+          sunDir: sky.sunDir, sunRadiance: sky.sunRadiance,
+        });
+        gl.depthFunc(gl.LEQUAL);
+        gl.depthMask(false);
+      }
 
       // ------------------------------------------------------ 5. volumétricos
       gl.disable(gl.DEPTH_TEST);

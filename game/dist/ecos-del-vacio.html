@@ -255,6 +255,108 @@
   EV.MathUtil = { clamp, lerp, smoothstep, damp, wrapAngle, TAU: Math.PI * 2, DEG: Math.PI / 180 };
 })(window.EV = window.EV || {});
 
+/* ===== 05-quat.js ===== */
+// Ecos del Vacío — cuaterniones.
+// La animación esquelética mezcla poses constantemente; con ángulos de Euler la
+// interpolación cruza el gimbal y los miembros se dan vuelta. Slerp no.
+(function (EV) {
+  'use strict';
+
+  const Q = {
+    create: () => new Float32Array([0, 0, 0, 1]),
+    identity: (o) => { o[0] = 0; o[1] = 0; o[2] = 0; o[3] = 1; return o; },
+    copy: (o, a) => { o[0] = a[0]; o[1] = a[1]; o[2] = a[2]; o[3] = a[3]; return o; },
+    set: (o, x, y, z, w) => { o[0] = x; o[1] = y; o[2] = z; o[3] = w; return o; },
+
+    fromAxisAngle: (o, ax, ay, az, rad) => {
+      const h = rad * 0.5, s = Math.sin(h);
+      const l = Math.hypot(ax, ay, az) || 1;
+      o[0] = (ax / l) * s; o[1] = (ay / l) * s; o[2] = (az / l) * s; o[3] = Math.cos(h);
+      return o;
+    },
+
+    // Euler XYZ en radianes (orden de aplicación X, luego Y, luego Z).
+    fromEuler: (o, x, y, z) => {
+      const cx = Math.cos(x * 0.5), sx = Math.sin(x * 0.5);
+      const cy = Math.cos(y * 0.5), sy = Math.sin(y * 0.5);
+      const cz = Math.cos(z * 0.5), sz = Math.sin(z * 0.5);
+      o[0] = sx * cy * cz + cx * sy * sz;
+      o[1] = cx * sy * cz - sx * cy * sz;
+      o[2] = cx * cy * sz + sx * sy * cz;
+      o[3] = cx * cy * cz - sx * sy * sz;
+      return o;
+    },
+
+    multiply: (o, a, b) => {
+      const ax = a[0], ay = a[1], az = a[2], aw = a[3];
+      const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+      o[0] = ax * bw + aw * bx + ay * bz - az * by;
+      o[1] = ay * bw + aw * by + az * bx - ax * bz;
+      o[2] = az * bw + aw * bz + ax * by - ay * bx;
+      o[3] = aw * bw - ax * bx - ay * by - az * bz;
+      return o;
+    },
+
+    // Slerp con corrección de hemisferio: sin ella, mezclar dos poses puede
+    // tomar el camino largo y el hueso gira 300° en vez de 60°.
+    slerp: (o, a, b, t) => {
+      let bx = b[0], by = b[1], bz = b[2], bw = b[3];
+      let cosom = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+      if (cosom < 0) { cosom = -cosom; bx = -bx; by = -by; bz = -bz; bw = -bw; }
+      let s0, s1;
+      if (1.0 - cosom > 1e-6) {
+        const omega = Math.acos(cosom);
+        const sinom = Math.sin(omega);
+        s0 = Math.sin((1.0 - t) * omega) / sinom;
+        s1 = Math.sin(t * omega) / sinom;
+      } else {
+        s0 = 1.0 - t; s1 = t;   // casi paralelos: lineal evita dividir por ~0
+      }
+      o[0] = s0 * a[0] + s1 * bx;
+      o[1] = s0 * a[1] + s1 * by;
+      o[2] = s0 * a[2] + s1 * bz;
+      o[3] = s0 * a[3] + s1 * bw;
+      return o;
+    },
+
+    normalize: (o, a) => {
+      const l = Math.hypot(a[0], a[1], a[2], a[3]) || 1;
+      o[0] = a[0] / l; o[1] = a[1] / l; o[2] = a[2] / l; o[3] = a[3] / l;
+      return o;
+    },
+
+    // Compone T*R*S directamente en una mat4 column-major.
+    toMat4: (o, q, pos, scl) => {
+      const x = q[0], y = q[1], z = q[2], w = q[3];
+      const x2 = x + x, y2 = y + y, z2 = z + z;
+      const xx = x * x2, xy = x * y2, xz = x * z2;
+      const yy = y * y2, yz = y * z2, zz = z * z2;
+      const wx = w * x2, wy = w * y2, wz = w * z2;
+      const sx = scl ? scl[0] : 1, sy = scl ? scl[1] : 1, sz = scl ? scl[2] : 1;
+      o[0] = (1 - (yy + zz)) * sx; o[1] = (xy + wz) * sx; o[2] = (xz - wy) * sx; o[3] = 0;
+      o[4] = (xy - wz) * sy; o[5] = (1 - (xx + zz)) * sy; o[6] = (yz + wx) * sy; o[7] = 0;
+      o[8] = (xz + wy) * sz; o[9] = (yz - wx) * sz; o[10] = (1 - (xx + yy)) * sz; o[11] = 0;
+      o[12] = pos ? pos[0] : 0; o[13] = pos ? pos[1] : 0; o[14] = pos ? pos[2] : 0; o[15] = 1;
+      return o;
+    },
+
+    rotateVec3: (o, q, v) => {
+      const x = v[0], y = v[1], z = v[2];
+      const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+      const ix = qw * x + qy * z - qz * y;
+      const iy = qw * y + qz * x - qx * z;
+      const iz = qw * z + qx * y - qy * x;
+      const iw = -qx * x - qy * y - qz * z;
+      o[0] = ix * qw + iw * -qx + iy * -qz - iz * -qy;
+      o[1] = iy * qw + iw * -qy + iz * -qx - ix * -qz;
+      o[2] = iz * qw + iw * -qz + ix * -qy - iy * -qx;
+      return o;
+    },
+  };
+
+  EV.Q = Q;
+})(window.EV = window.EV || {});
+
 /* ===== 10-gl.js ===== */
 // Ecos del Vacío — capa fina sobre WebGL2: programas, buffers, framebuffers.
 (function (EV) {
@@ -1486,6 +1588,592 @@ void main(){
   EV.Terrain = { create, SIZE, HALF };
 })(window.EV = window.EV || {});
 
+/* ===== 48-anim.js ===== */
+// Ecos del Vacío — animación esquelética.
+// Esqueleto en bind pose, clips con pistas por hueso, mezcla por slerp y subida
+// de matrices de piel a una textura (evita el límite de uniformes por programa).
+(function (EV) {
+  'use strict';
+
+  const Q = EV.Q, M4 = EV.M4, V3 = EV.V3, M = EV.MathUtil;
+
+  // --------------------------------------------------------------- esqueleto
+  // defs: [{ name, parent: índice o -1, pos: [x,y,z], rot?: [ex,ey,ez] }]
+  function createSkeleton(defs) {
+    const count = defs.length;
+    const names = defs.map(d => d.name);
+    const parents = new Int32Array(count);
+    const bindPos = new Float32Array(count * 3);
+    const bindRot = new Float32Array(count * 4);
+    const bindWorld = new Float32Array(count * 16);
+    const inverseBind = new Float32Array(count * 16);
+    const index = Object.create(null);
+
+    const tmpLocal = M4.create();
+    const tmpQ = Q.create();
+
+    for (let i = 0; i < count; i++) {
+      const d = defs[i];
+      index[d.name] = i;
+      parents[i] = d.parent === undefined ? -1 : d.parent;
+      if (parents[i] >= i) {
+        throw new Error(`El hueso ${d.name} referencia un padre posterior; el orden debe ser topológico.`);
+      }
+      bindPos[i * 3] = d.pos[0]; bindPos[i * 3 + 1] = d.pos[1]; bindPos[i * 3 + 2] = d.pos[2];
+      const r = d.rot || [0, 0, 0];
+      Q.fromEuler(tmpQ, r[0], r[1], r[2]);
+      bindRot.set(tmpQ, i * 4);
+
+      Q.toMat4(tmpLocal, tmpQ, [bindPos[i * 3], bindPos[i * 3 + 1], bindPos[i * 3 + 2]], null);
+      const w = bindWorld.subarray(i * 16, i * 16 + 16);
+      if (parents[i] < 0) w.set(tmpLocal);
+      else {
+        const pw = bindWorld.subarray(parents[i] * 16, parents[i] * 16 + 16);
+        const out = M4.create();
+        M4.multiply(out, pw, tmpLocal);
+        w.set(out);
+      }
+      const inv = M4.create();
+      M4.invert(inv, bindWorld.subarray(i * 16, i * 16 + 16));
+      inverseBind.set(inv, i * 16);
+    }
+
+    return {
+      count, names, parents, bindPos, bindRot, bindWorld, inverseBind, index,
+      bone(name) {
+        const i = index[name];
+        if (i === undefined) throw new Error('Hueso desconocido: ' + name);
+        return i;
+      },
+      // Posición del hueso en bind pose, útil para generar la malla.
+      bindWorldPos(i, out) {
+        const o = i * 16;
+        out[0] = bindWorld[o + 12]; out[1] = bindWorld[o + 13]; out[2] = bindWorld[o + 14];
+        return out;
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------- clips
+  // tracks: { hueso: { rot: [[t, ex, ey, ez], ...], pos: [[t, x, y, z], ...] } }
+  // Los ángulos se escriben en GRADOS: authoring legible, conversión al cargar.
+  function createClip(spec) {
+    const tracks = [];
+    for (const boneName in spec.tracks) {
+      const t = spec.tracks[boneName];
+      const track = { bone: boneName, rot: null, pos: null };
+      if (t.rot) {
+        track.rot = t.rot.map(k => {
+          const q = Q.create();
+          Q.fromEuler(q, k[1] * M.DEG, k[2] * M.DEG, k[3] * M.DEG);
+          return { t: k[0], q };
+        }).sort((a, b) => a.t - b.t);
+      }
+      if (t.pos) {
+        track.pos = t.pos.map(k => ({ t: k[0], p: [k[1], k[2], k[3]] }))
+          .sort((a, b) => a.t - b.t);
+      }
+      tracks.push(track);
+    }
+    return {
+      name: spec.name,
+      duration: spec.duration,
+      loop: spec.loop !== false,
+      tracks,
+      // Movimiento raíz que el clip implica (para animaciones que avanzan solas)
+      rootMotion: spec.rootMotion || null,
+    };
+  }
+
+  function findKeys(keys, time) {
+    // Búsqueda lineal: las pistas tienen pocas claves y el coste es despreciable
+    // frente a hacer binaria con estado por pista.
+    let a = keys[0], b = keys[0];
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].t <= time) { a = keys[i]; b = keys[Math.min(i + 1, keys.length - 1)]; }
+      else break;
+    }
+    const span = b.t - a.t;
+    const f = span > 1e-6 ? M.clamp((time - a.t) / span, 0, 1) : 0;
+    return { a, b, f };
+  }
+
+  // --------------------------------------------------------------------- pose
+  function createPose(skeleton) {
+    const n = skeleton.count;
+    const pose = {
+      pos: new Float32Array(skeleton.bindPos),
+      rot: new Float32Array(skeleton.bindRot),
+      count: n,
+    };
+    pose.reset = () => {
+      pose.pos.set(skeleton.bindPos);
+      pose.rot.set(skeleton.bindRot);
+    };
+    return pose;
+  }
+
+  // Escribe un clip sobre una pose, mezclando con peso (0..1).
+  const _q = Q.create();
+  function sampleClip(skeleton, clip, time, pose, weight) {
+    const t = clip.loop
+      ? ((time % clip.duration) + clip.duration) % clip.duration
+      : M.clamp(time, 0, clip.duration);
+
+    for (const track of clip.tracks) {
+      const i = skeleton.index[track.bone];
+      if (i === undefined) continue;
+      if (track.rot && track.rot.length) {
+        const { a, b, f } = findKeys(track.rot, t);
+        Q.slerp(_q, a.q, b.q, f);
+        if (weight >= 0.999) {
+          pose.rot.set(_q, i * 4);
+        } else {
+          const cur = pose.rot.subarray(i * 4, i * 4 + 4);
+          const out = Q.create();
+          Q.slerp(out, cur, _q, weight);
+          pose.rot.set(out, i * 4);
+        }
+      }
+      if (track.pos && track.pos.length) {
+        const { a, b, f } = findKeys(track.pos, t);
+        const o = i * 3;
+        for (let k = 0; k < 3; k++) {
+          const v = a.p[k] + (b.p[k] - a.p[k]) * f;
+          pose.pos[o + k] = weight >= 0.999
+            ? v
+            : pose.pos[o + k] + (v - pose.pos[o + k]) * weight;
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- animador
+  // Máquina simple: un clip activo, uno saliente, y un fundido entre ambos.
+  function createAnimator(skeleton, clips) {
+    const st = {
+      clips,
+      current: null, currentTime: 0, currentSpeed: 1,
+      previous: null, previousTime: 0,
+      fade: 0, fadeDuration: 0.001,
+      // Capa aditiva opcional (p. ej. apuntar mientras camina)
+      additive: null, additiveTime: 0, additiveWeight: 0,
+    };
+
+    function play(name, opts = {}) {
+      const clip = clips[name];
+      if (!clip) throw new Error('Clip desconocido: ' + name);
+      if (st.current === clip && opts.restart !== true) {
+        st.currentSpeed = opts.speed === undefined ? st.currentSpeed : opts.speed;
+        return;
+      }
+      st.previous = st.current;
+      st.previousTime = st.currentTime;
+      st.current = clip;
+      st.currentTime = opts.offset || 0;
+      st.currentSpeed = opts.speed === undefined ? 1 : opts.speed;
+      st.fadeDuration = Math.max(opts.fade === undefined ? 0.18 : opts.fade, 0.001);
+      st.fade = st.previous ? 0 : 1;
+    }
+
+    function setAdditive(name, weight) {
+      st.additive = name ? clips[name] : null;
+      st.additiveWeight = weight || 0;
+    }
+
+    function update(dt) {
+      if (!st.current) return;
+      st.currentTime += dt * st.currentSpeed;
+      st.previousTime += dt;
+      st.additiveTime += dt;
+      if (st.fade < 1) {
+        st.fade = Math.min(1, st.fade + dt / st.fadeDuration);
+        if (st.fade >= 1) st.previous = null;
+      }
+    }
+
+    function apply(pose) {
+      pose.reset();
+      if (!st.current) return;
+      if (st.previous && st.fade < 1) {
+        sampleClip(skeleton, st.previous, st.previousTime, pose, 1);
+        sampleClip(skeleton, st.current, st.currentTime, pose, st.fade);
+      } else {
+        sampleClip(skeleton, st.current, st.currentTime, pose, 1);
+      }
+      if (st.additive && st.additiveWeight > 0.001) {
+        sampleClip(skeleton, st.additive, st.additiveTime, pose, st.additiveWeight);
+      }
+    }
+
+    Object.assign(st, { play, update, apply, setAdditive });
+    // Con Object.assign el getter se evaluaría una sola vez y quedaría fijo en
+    // null; hay que definirlo sobre el objeto.
+    Object.defineProperty(st, 'currentName', {
+      get() { return st.current ? st.current.name : null; },
+    });
+    return st;
+  }
+
+  // ------------------------------------------------- instancia con matrices
+  // Cada personaje sube sus matrices de piel a una textura RGBA32F de 4 téxeles
+  // por hueso. Con uniformes mat4 se choca contra MAX_VERTEX_UNIFORM_VECTORS.
+  function createSkinInstance(skeleton) {
+    const gl = EV.GL.ctx;
+    const n = skeleton.count;
+    const world = new Float32Array(n * 16);
+    const skin = new Float32Array(n * 16);
+    const prevSkin = new Float32Array(n * 16);
+    const texWidth = n * 4;
+
+    const makeTex = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, texWidth, 1);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      return t;
+    };
+    const boneTex = makeTex();
+    const prevBoneTex = makeTex();
+
+    const _local = M4.create();
+    const _out = M4.create();
+
+    // Calcula world = padre * local y skin = world * inverseBind.
+    function computeMatrices(pose, rootMatrix) {
+      prevSkin.set(skin);
+      for (let i = 0; i < n; i++) {
+        const p = skeleton.parents[i];
+        Q.toMat4(_local,
+          pose.rot.subarray(i * 4, i * 4 + 4),
+          pose.pos.subarray(i * 3, i * 3 + 3),
+          null);
+        if (p < 0) {
+          if (rootMatrix) M4.multiply(_out, rootMatrix, _local);
+          else M4.copy(_out, _local);
+        } else {
+          M4.multiply(_out, world.subarray(p * 16, p * 16 + 16), _local);
+        }
+        world.set(_out, i * 16);
+        M4.multiply(_out, _out, skeleton.inverseBind.subarray(i * 16, i * 16 + 16));
+        skin.set(_out, i * 16);
+      }
+    }
+
+    function upload() {
+      gl.bindTexture(gl.TEXTURE_2D, boneTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texWidth, 1, gl.RGBA, gl.FLOAT, skin);
+      gl.bindTexture(gl.TEXTURE_2D, prevBoneTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texWidth, 1, gl.RGBA, gl.FLOAT, prevSkin);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+
+    function boneWorldPos(i, out) {
+      const o = i * 16;
+      out[0] = world[o + 12]; out[1] = world[o + 13]; out[2] = world[o + 14];
+      return out;
+    }
+
+    return {
+      skeleton, world, skin, prevSkin, boneTex, prevBoneTex, texWidth,
+      computeMatrices, upload, boneWorldPos,
+    };
+  }
+
+  EV.Anim = {
+    createSkeleton, createClip, createPose, createAnimator,
+    createSkinInstance, sampleClip,
+  };
+})(window.EV = window.EV || {});
+
+/* ===== 49-charmesh.js ===== */
+// Ecos del Vacío — generación procedural de mallas con piel (skinning).
+// Un personaje es un solo draw call: los materiales (traje, blindaje, visor,
+// acento) viajan en el atributo `extra` y se resuelven en el fragment shader.
+(function (EV) {
+  'use strict';
+
+  const V3 = EV.V3, M = EV.MathUtil;
+
+  // Identificadores de submaterial por vértice.
+  const MAT_SUIT = 0.0;
+  const MAT_ARMOR = 1.0;
+  const MAT_VISOR = 2.0;
+  const MAT_ACCENT = 3.0;
+  const MAT_RUBBER = 4.0;
+
+  function builder(skeleton) {
+    const P = [], N = [], E = [], BI = [], BW = [], I = [];
+
+    function pushVert(px, py, pz, nx, ny, nz, extra, bones) {
+      P.push(px, py, pz);
+      N.push(nx, ny, nz);
+      E.push(extra);
+      // bones: [[índice, peso], ...] — se normaliza y se rellena a 4.
+      let total = 0;
+      for (const b of bones) total += b[1];
+      if (total <= 1e-6) { total = 1; }
+      const idx = [0, 0, 0, 0], wgt = [0, 0, 0, 0];
+      for (let k = 0; k < 4 && k < bones.length; k++) {
+        idx[k] = bones[k][0];
+        wgt[k] = bones[k][1] / total;
+      }
+      BI.push(idx[0], idx[1], idx[2], idx[3]);
+      BW.push(wgt[0], wgt[1], wgt[2], wgt[3]);
+      return P.length / 3 - 1;
+    }
+
+    function quad(a, b, c, d) { I.push(a, b, c, a, c, d); }
+
+    // Base ortonormal alrededor de un eje.
+    function frame(axis) {
+      const up = Math.abs(axis[1]) > 0.94 ? [1, 0, 0] : [0, 1, 0];
+      const t = V3.create(), bi = V3.create();
+      V3.cross(t, up, axis); V3.normalize(t, t);
+      V3.cross(bi, axis, t); V3.normalize(bi, bi);
+      return [t, bi];
+    }
+
+    const _a = V3.create(), _b = V3.create(), _ax = V3.create();
+
+    // Tubo elíptico entre dos huesos, con pesos mezclados en las puntas para
+    // que codos y rodillas se doblen sin pellizcarse.
+    function limb(boneA, boneB, opts = {}) {
+      const {
+        rx0 = 0.09, rz0 = null, rx1 = 0.075, rz1 = null,
+        seg = 12, rings = 6, material = MAT_SUIT,
+        parentBlend = 0.45, childBlend = 0.45,
+        offsetA = null, offsetB = null, bulge = 0,
+      } = opts;
+      const z0 = rz0 === null ? rx0 : rz0;
+      const z1 = rz1 === null ? rx1 : rz1;
+
+      const ia = skeleton.bone(boneA);
+      const ib = skeleton.bone(boneB);
+      const ip = skeleton.parents[ia] >= 0 ? skeleton.parents[ia] : ia;
+
+      skeleton.bindWorldPos(ia, _a);
+      skeleton.bindWorldPos(ib, _b);
+      if (offsetA) V3.add(_a, _a, offsetA);
+      if (offsetB) V3.add(_b, _b, offsetB);
+
+      V3.sub(_ax, _b, _a);
+      const len = V3.len(_ax);
+      if (len < 1e-5) return;
+      V3.scale(_ax, _ax, 1 / len);
+      const [T, B] = frame(_ax);
+
+      const ringStart = P.length / 3;
+      for (let r = 0; r <= rings; r++) {
+        const t = r / rings;
+        // Ensanchamiento en el medio: los miembros no son conos rectos.
+        const swell = 1 + Math.sin(t * Math.PI) * bulge;
+        const rx = (rx0 + (rx1 - rx0) * t) * swell;
+        const rz = (z0 + (z1 - z0) * t) * swell;
+
+        const wParent = parentBlend * M.smoothstep(0.30, 0.0, t);
+        const wChild = childBlend * M.smoothstep(0.70, 1.0, t);
+        const wSelf = Math.max(0.05, 1 - wParent - wChild);
+        const bones = [[ia, wSelf]];
+        if (wParent > 1e-3 && ip !== ia) bones.push([ip, wParent]);
+        if (wChild > 1e-3) bones.push([ib, wChild]);
+
+        for (let s = 0; s <= seg; s++) {
+          const ang = (s / seg) * Math.PI * 2;
+          const ca = Math.cos(ang), sa = Math.sin(ang);
+          const px = _a[0] + _ax[0] * len * t + T[0] * ca * rx + B[0] * sa * rz;
+          const py = _a[1] + _ax[1] * len * t + T[1] * ca * rx + B[1] * sa * rz;
+          const pz = _a[2] + _ax[2] * len * t + T[2] * ca * rx + B[2] * sa * rz;
+          // Normal de la superficie elíptica (gradiente, no la dirección radial).
+          let nx = T[0] * (ca / rx) + B[0] * (sa / rz);
+          let ny = T[1] * (ca / rx) + B[1] * (sa / rz);
+          let nz = T[2] * (ca / rx) + B[2] * (sa / rz);
+          const nl = Math.hypot(nx, ny, nz) || 1;
+          pushVert(px, py, pz, nx / nl, ny / nl, nz / nl, material, bones);
+        }
+      }
+      for (let r = 0; r < rings; r++) {
+        for (let s = 0; s < seg; s++) {
+          const a = ringStart + r * (seg + 1) + s;
+          quad(a, a + seg + 1, a + seg + 2, a + 1);
+        }
+      }
+    }
+
+    // Elipsoide pegado a un hueso: articulaciones, cabeza, casco.
+    function blob(boneName, opts = {}) {
+      const {
+        r = 0.1, ry = null, rz = null, offset = [0, 0, 0],
+        seg = 14, rings = 10, material = MAT_SUIT, weightWith = null, weightAmount = 0.35,
+        squashY = 1,
+      } = opts;
+      const i = skeleton.bone(boneName);
+      const rx = r, RY = (ry === null ? r : ry) * squashY, RZ = rz === null ? r : rz;
+      skeleton.bindWorldPos(i, _a);
+      const cx = _a[0] + offset[0], cy = _a[1] + offset[1], cz = _a[2] + offset[2];
+
+      const bones = [[i, 1]];
+      if (weightWith) bones.push([skeleton.bone(weightWith), weightAmount]);
+
+      const start = P.length / 3;
+      for (let j = 0; j <= rings; j++) {
+        const v = j / rings, theta = v * Math.PI;
+        const st = Math.sin(theta), ct = Math.cos(theta);
+        for (let s = 0; s <= seg; s++) {
+          const u = s / seg, phi = u * Math.PI * 2;
+          const ux = st * Math.cos(phi), uy = ct, uz = st * Math.sin(phi);
+          let nx = ux / rx, ny = uy / RY, nz = uz / RZ;
+          const nl = Math.hypot(nx, ny, nz) || 1;
+          pushVert(cx + ux * rx, cy + uy * RY, cz + uz * RZ,
+            nx / nl, ny / nl, nz / nl, material, bones);
+        }
+      }
+      for (let j = 0; j < rings; j++) {
+        for (let s = 0; s < seg; s++) {
+          const a = start + j * (seg + 1) + s;
+          quad(a, a + seg + 1, a + seg + 2, a + 1);
+        }
+      }
+    }
+
+    // Placa de blindaje: caja biselada, rígida a un hueso. El bisel importa —
+    // una arista viva de 90° delata geometría barata en cuanto le pega la luz.
+    function plate(boneName, opts = {}) {
+      const {
+        size = [0.2, 0.2, 0.1], offset = [0, 0, 0], rot = [0, 0, 0],
+        bevel = 0.012, material = MAT_ARMOR, weightWith = null, weightAmount = 0,
+      } = opts;
+      const i = skeleton.bone(boneName);
+      skeleton.bindWorldPos(i, _a);
+      const bones = [[i, 1]];
+      if (weightWith && weightAmount > 0) bones.push([skeleton.bone(weightWith), weightAmount]);
+
+      const cx = Math.cos(rot[0]), sx = Math.sin(rot[0]);
+      const cy = Math.cos(rot[1]), sy = Math.sin(rot[1]);
+      const cz = Math.cos(rot[2]), sz = Math.sin(rot[2]);
+      const rotate = (v) => {
+        let x = v[0], y = v[1], z = v[2];
+        let y1 = y * cx - z * sx, z1 = y * sx + z * cx;
+        let x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+        let x3 = x2 * cz - y1 * sz, y3 = x2 * sz + y1 * cz;
+        return [x3, y3, z2];
+      };
+
+      const hx = size[0] / 2, hy = size[1] / 2, hz = size[2] / 2;
+      const faces = [
+        { n: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], d: hz },
+        { n: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0], d: hz },
+        { n: [1, 0, 0], u: [0, 0, -1], v: [0, 1, 0], d: hx },
+        { n: [-1, 0, 0], u: [0, 0, 1], v: [0, 1, 0], d: hx },
+        { n: [0, 1, 0], u: [1, 0, 0], v: [0, 0, -1], d: hy },
+        { n: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1], d: hy },
+      ];
+      for (const f of faces) {
+        // Cara achicada por el bisel + un anillo perimetral inclinado.
+        const eu = (f.u[0] ? hx : f.u[1] ? hy : hz) - bevel;
+        const ev = (f.v[0] ? hx : f.v[1] ? hy : hz) - bevel;
+        const base = P.length / 3;
+        const corners = [[-eu, -ev], [eu, -ev], [eu, ev], [-eu, ev]];
+        for (const [a, b] of corners) {
+          const local = [
+            f.n[0] * f.d + f.u[0] * a + f.v[0] * b,
+            f.n[1] * f.d + f.u[1] * a + f.v[1] * b,
+            f.n[2] * f.d + f.u[2] * a + f.v[2] * b,
+          ];
+          const w = rotate(local);
+          const nn = rotate(f.n);
+          pushVert(_a[0] + offset[0] + w[0], _a[1] + offset[1] + w[1], _a[2] + offset[2] + w[2],
+            nn[0], nn[1], nn[2], material, bones);
+        }
+        quad(base, base + 1, base + 2, base + 3);
+
+        // Faldón del bisel: normal a 45°, atrapa un reflejo especular fino.
+        const outer = [[-eu - bevel, -ev - bevel], [eu + bevel, -ev - bevel],
+                       [eu + bevel, ev + bevel], [-eu - bevel, ev + bevel]];
+        const ringBase = P.length / 3;
+        for (let k = 0; k < 4; k++) {
+          const [a, b] = outer[k];
+          const local = [
+            f.n[0] * (f.d - bevel) + f.u[0] * a + f.v[0] * b,
+            f.n[1] * (f.d - bevel) + f.u[1] * a + f.v[1] * b,
+            f.n[2] * (f.d - bevel) + f.u[2] * a + f.v[2] * b,
+          ];
+          const w = rotate(local);
+          const ln = [
+            f.n[0] * 0.6 + (f.u[0] * Math.sign(a) + f.v[0] * Math.sign(b)) * 0.5,
+            f.n[1] * 0.6 + (f.u[1] * Math.sign(a) + f.v[1] * Math.sign(b)) * 0.5,
+            f.n[2] * 0.6 + (f.u[2] * Math.sign(a) + f.v[2] * Math.sign(b)) * 0.5,
+          ];
+          const nn = rotate(ln);
+          const nl = Math.hypot(nn[0], nn[1], nn[2]) || 1;
+          pushVert(_a[0] + offset[0] + w[0], _a[1] + offset[1] + w[1], _a[2] + offset[2] + w[2],
+            nn[0] / nl, nn[1] / nl, nn[2] / nl, material, bones);
+        }
+        for (let k = 0; k < 4; k++) {
+          const n2 = (k + 1) % 4;
+          quad(base + k, ringBase + k, ringBase + n2, base + n2);
+        }
+      }
+    }
+
+    function build() {
+      const gl = EV.GL.ctx;
+      const count = P.length / 3;
+      const STRIDE = 15;   // pos3 + nrm3 + extra1 + idx4 + wgt4
+      const verts = new Float32Array(count * STRIDE);
+      for (let i = 0; i < count; i++) {
+        const o = i * STRIDE;
+        verts[o] = P[i * 3]; verts[o + 1] = P[i * 3 + 1]; verts[o + 2] = P[i * 3 + 2];
+        verts[o + 3] = N[i * 3]; verts[o + 4] = N[i * 3 + 1]; verts[o + 5] = N[i * 3 + 2];
+        verts[o + 6] = E[i];
+        verts[o + 7] = BI[i * 4]; verts[o + 8] = BI[i * 4 + 1];
+        verts[o + 9] = BI[i * 4 + 2]; verts[o + 10] = BI[i * 4 + 3];
+        verts[o + 11] = BW[i * 4]; verts[o + 12] = BW[i * 4 + 1];
+        verts[o + 13] = BW[i * 4 + 2]; verts[o + 14] = BW[i * 4 + 3];
+      }
+      const idx = count > 65535 ? new Uint32Array(I) : new Uint16Array(I);
+      const vbo = EV.GL.buffer(gl.ARRAY_BUFFER, verts);
+      const ibo = EV.GL.buffer(gl.ELEMENT_ARRAY_BUFFER, idx);
+      const bytes = STRIDE * 4;
+      const vao = EV.GL.vao([
+        { loc: 0, size: 3, buffer: vbo, stride: bytes, offset: 0 },
+        { loc: 1, size: 3, buffer: vbo, stride: bytes, offset: 12 },
+        { loc: 2, size: 1, buffer: vbo, stride: bytes, offset: 24 },
+        { loc: 5, size: 4, buffer: vbo, stride: bytes, offset: 28 },
+        { loc: 6, size: 4, buffer: vbo, stride: bytes, offset: 44 },
+      ], ibo);
+      const indexType = count > 65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+      return {
+        vao, indexCount: I.length, indexType, vertexCount: count,
+        triangles: I.length / 3,
+        draw() {
+          gl.bindVertexArray(vao);
+          gl.drawElements(gl.TRIANGLES, I.length, indexType, 0);
+        },
+      };
+    }
+
+    // Datos crudos en CPU: los usa el exportador a glTF, que no puede leer
+    // de vuelta los buffers de la GPU.
+    function raw() {
+      return {
+        positions: P.slice(), normals: N.slice(), extras: E.slice(),
+        boneIdx: BI.slice(), boneWgt: BW.slice(), indices: I.slice(),
+        vertexCount: P.length / 3, triangleCount: I.length / 3,
+      };
+    }
+
+    return { limb, blob, plate, build, raw,
+      get stats() { return { verts: P.length / 3, tris: I.length / 3 }; } };
+  }
+
+  EV.CharMesh = { builder, MAT_SUIT, MAT_ARMOR, MAT_VISOR, MAT_ACCENT, MAT_RUBBER };
+})(window.EV = window.EV || {});
+
 /* ===== 50-geometry.js ===== */
 // Ecos del Vacío — primitivas de malla y grafo de nodos.
 // Layout de vértice común a todo el juego: pos(3) + normal(3) + extra(1).
@@ -1620,46 +2308,116 @@ void main(){
     return upload(P, Nn, E, I);
   }
 
-  // Espira de cristal: prisma irregular que se afina, con facetas planas.
+  // Racimo de cristal: varias agujas facetadas inclinadas desde una base común.
+  // Una sola aguja por instancia leía como un cono de tráfico; un racimo lee
+  // como una formación mineral.
   function crystalSpire(seed) {
     const rnd = EV.makeNoise(seed);
     const P = [], Nn = [], E = [], I = [];
-    const sides = 5 + Math.floor(rnd.rand() * 3);
-    const h = 1.0;
-    const rBase = 0.30 + rnd.rand() * 0.16;
-    const rMid = rBase * (0.7 + rnd.rand() * 0.25);
-    const levels = [
-      { y: 0.0, r: rBase },
-      { y: 0.42 * h, r: rMid },
-      { y: 0.80 * h, r: rMid * 0.52 },
-      { y: h, r: 0.012 },
-    ];
-    const jitter = [];
-    for (let i = 0; i < sides; i++) jitter.push(0.75 + rnd.rand() * 0.5);
+    const shards = 3 + Math.floor(rnd.rand() * 4);
 
-    for (let l = 0; l < levels.length - 1; l++) {
-      const lo = levels[l], hi = levels[l + 1];
-      for (let i = 0; i < sides; i++) {
-        const a0 = (i / sides) * Math.PI * 2;
-        const a1 = ((i + 1) / sides) * Math.PI * 2;
-        const j0 = jitter[i], j1 = jitter[(i + 1) % sides];
-        const p = [
-          [Math.cos(a0) * lo.r * j0, lo.y, Math.sin(a0) * lo.r * j0],
-          [Math.cos(a1) * lo.r * j1, lo.y, Math.sin(a1) * lo.r * j1],
-          [Math.cos(a1) * hi.r * j1, hi.y, Math.sin(a1) * hi.r * j1],
-          [Math.cos(a0) * hi.r * j0, hi.y, Math.sin(a0) * hi.r * j0],
-        ];
-        // normal plana de la faceta
-        const ux = p[1][0] - p[0][0], uy = p[1][1] - p[0][1], uz = p[1][2] - p[0][2];
-        const vx = p[3][0] - p[0][0], vy = p[3][1] - p[0][1], vz = p[3][2] - p[0][2];
+    for (let sh = 0; sh < shards; sh++) {
+      const sides = 5 + Math.floor(rnd.rand() * 3);
+      // La aguja principal es vertical; las secundarias se abren y son menores.
+      const main = sh === 0;
+      const h = main ? 1.0 : (0.30 + rnd.rand() * 0.52);
+      const tilt = main ? rnd.rand() * 0.10 : 0.22 + rnd.rand() * 0.55;
+      const dir = rnd.rand() * Math.PI * 2;
+      const offR = main ? 0 : 0.12 + rnd.rand() * 0.26;
+      const ox = Math.cos(dir) * offR, oz = Math.sin(dir) * offR;
+      const rBase = (main ? 0.26 : 0.13) * (0.75 + rnd.rand() * 0.6);
+      const rMid = rBase * (0.68 + rnd.rand() * 0.26);
+
+      const levels = [
+        { y: -0.06, r: rBase * 1.08 },
+        { y: 0.40 * h, r: rMid },
+        { y: 0.80 * h, r: rMid * 0.48 },
+        { y: h, r: 0.010 },
+      ];
+      const jitter = [];
+      for (let i = 0; i < sides; i++) jitter.push(0.74 + rnd.rand() * 0.52);
+
+      // Inclinación de la aguja alrededor de su base.
+      const ct = Math.cos(tilt), st = Math.sin(tilt);
+      const cd = Math.cos(dir), sd = Math.sin(dir);
+      const place = (x, y, z) => {
+        // inclina en el plano definido por dir
+        const lx = x * cd + z * sd, lz = -x * sd + z * cd;
+        const ty = y * ct - lx * st, tx = y * st + lx * ct;
+        return [tx * cd - lz * sd + ox, ty, tx * sd + lz * cd + oz];
+      };
+
+      for (let l = 0; l < levels.length - 1; l++) {
+        const lo = levels[l], hi = levels[l + 1];
+        for (let i = 0; i < sides; i++) {
+          const a0 = (i / sides) * Math.PI * 2;
+          const a1 = ((i + 1) / sides) * Math.PI * 2;
+          const j0 = jitter[i], j1 = jitter[(i + 1) % sides];
+          const q = [
+            place(Math.cos(a0) * lo.r * j0, lo.y, Math.sin(a0) * lo.r * j0),
+            place(Math.cos(a1) * lo.r * j1, lo.y, Math.sin(a1) * lo.r * j1),
+            place(Math.cos(a1) * hi.r * j1, hi.y, Math.sin(a1) * hi.r * j1),
+            place(Math.cos(a0) * hi.r * j0, hi.y, Math.sin(a0) * hi.r * j0),
+          ];
+          const ux = q[1][0] - q[0][0], uy = q[1][1] - q[0][1], uz = q[1][2] - q[0][2];
+          const vx = q[3][0] - q[0][0], vy = q[3][1] - q[0][1], vz = q[3][2] - q[0][2];
+          let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+          const nl = Math.hypot(nx, ny, nz) || 1;
+          nx /= nl; ny /= nl; nz /= nl;
+          const base = P.length / 3;
+          for (const v of q) {
+            P.push(v[0], v[1], v[2]);
+            Nn.push(nx, ny, nz);
+            E.push(Math.max(v[1], 0));   // altura: gradiente interno del cristal
+          }
+          I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
+      }
+    }
+    return upload(P, Nn, E, I);
+  }
+
+  // Roca erosionada: esfera deformada por ruido, con facetas planas.
+  function rock(seed) {
+    const rnd = EV.makeNoise(seed);
+    const P = [], Nn = [], E = [], I = [];
+    const seg = 10, rings = 7;
+    const amp = [];
+    for (let i = 0; i < 12; i++) amp.push(0.62 + rnd.rand() * 0.75);
+    const radiusAt = (x, y, z) => {
+      let r = 1.0;
+      r *= 0.78 + 0.30 * Math.sin(x * 3.1 + amp[0]) * Math.cos(z * 2.7 + amp[1]);
+      r *= 0.86 + 0.22 * Math.sin(y * 4.3 + amp[2]);
+      r *= 0.90 + 0.18 * Math.cos(x * 6.1 + y * 5.2 + amp[3]);
+      return Math.max(r, 0.35);
+    };
+    const grid = [];
+    for (let j = 0; j <= rings; j++) {
+      const row = [];
+      const theta = (j / rings) * Math.PI;
+      for (let i = 0; i <= seg; i++) {
+        const phi = (i / seg) * Math.PI * 2;
+        const ux = Math.sin(theta) * Math.cos(phi);
+        const uy = Math.cos(theta);
+        const uz = Math.sin(theta) * Math.sin(phi);
+        const r = radiusAt(ux, uy, uz);
+        // Aplastada: las rocas se asientan, no flotan como pelotas.
+        row.push([ux * r, uy * r * 0.62, uz * r]);
+      }
+      grid.push(row);
+    }
+    for (let j = 0; j < rings; j++) {
+      for (let i = 0; i < seg; i++) {
+        const q = [grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]];
+        const ux = q[1][0] - q[0][0], uy = q[1][1] - q[0][1], uz = q[1][2] - q[0][2];
+        const vx = q[3][0] - q[0][0], vy = q[3][1] - q[0][1], vz = q[3][2] - q[0][2];
         let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
         const nl = Math.hypot(nx, ny, nz) || 1;
-        nx /= nl; ny /= nl; nz /= nl;
         const base = P.length / 3;
-        for (const v of p) {
+        for (const v of q) {
           P.push(v[0], v[1], v[2]);
-          Nn.push(nx, ny, nz);
-          E.push(v[1] / h);   // extra = altura normalizada, para el gradiente interno
+          Nn.push(nx / nl, ny / nl, nz / nl);
+          E.push(0);
         }
         I.push(base, base + 1, base + 2, base, base + 2, base + 3);
       }
@@ -1701,7 +2459,632 @@ void main(){
     for (const c of n.children) traverse(c, fn, vis);
   }
 
-  EV.Geo = { box, cylinder, sphere, crystalSpire, node, updateWorld, traverse, upload, STRIDE };
+  EV.Geo = { box, cylinder, sphere, crystalSpire, rock, node, updateWorld, traverse, upload, STRIDE };
+})(window.EV = window.EV || {});
+
+/* ===== 51-characters.js ===== */
+// Ecos del Vacío — personajes: esqueleto humano, estilos de traje y clips.
+// Los ángulos de los clips se escriben en grados y con el mismo criterio en
+// todo el archivo: rotación +X sobre un hueso que apunta a -Y lo lleva hacia
+// -Z, que es el frente del personaje. Por eso "pierna adelante" es +X y
+// "rodilla flexionada" es -X.
+(function (EV) {
+  'use strict';
+
+  const CM = EV.CharMesh;
+  const V3 = EV.V3, Q = EV.Q, M = EV.MathUtil;
+
+  // ------------------------------------------------------------- esqueleto
+  const BONES = [
+    { name: 'root', parent: -1, pos: [0, 0.94, 0] },
+    { name: 'spine', parent: 0, pos: [0, 0.17, 0] },
+    { name: 'chest', parent: 1, pos: [0, 0.21, 0] },
+    { name: 'neck', parent: 2, pos: [0, 0.20, 0] },
+    { name: 'head', parent: 3, pos: [0, 0.09, 0] },
+
+    { name: 'clavL', parent: 2, pos: [0.07, 0.15, 0] },
+    { name: 'armL', parent: 5, pos: [0.14, -0.03, 0] },
+    { name: 'foreL', parent: 6, pos: [0, -0.29, 0] },
+    { name: 'handL', parent: 7, pos: [0, -0.26, 0] },
+
+    { name: 'clavR', parent: 2, pos: [-0.07, 0.15, 0] },
+    { name: 'armR', parent: 9, pos: [-0.14, -0.03, 0] },
+    { name: 'foreR', parent: 10, pos: [0, -0.29, 0] },
+    { name: 'handR', parent: 11, pos: [0, -0.26, 0] },
+
+    { name: 'thighL', parent: 0, pos: [0.105, -0.07, 0] },
+    { name: 'shinL', parent: 13, pos: [0, -0.44, 0] },
+    { name: 'footL', parent: 14, pos: [0, -0.42, 0] },
+
+    { name: 'thighR', parent: 0, pos: [-0.105, -0.07, 0] },
+    { name: 'shinR', parent: 16, pos: [0, -0.44, 0] },
+    { name: 'footR', parent: 17, pos: [0, -0.42, 0] },
+  ];
+
+  let _skeleton = null;
+  function skeleton() {
+    if (!_skeleton) _skeleton = EV.Anim.createSkeleton(BONES);
+    return _skeleton;
+  }
+
+  // ----------------------------------------------------------------- mallas
+  const STYLES = {
+    // Ingeniero de expedición: el jugador. Traje pesado, mochila, herramientas.
+    engineer: { armor: 'heavy', pack: true, pauldrons: true, visor: 'wide', bulk: 1.0 },
+    // Seguridad de la Meridiano: blindaje más grueso, casco con visera.
+    soldier: { armor: 'heavy', pack: false, pauldrons: true, visor: 'narrow', bulk: 1.10, brow: true },
+    // Técnica: traje ligero, sin pauldrones, cinturón de herramientas.
+    technician: { armor: 'light', pack: true, pauldrons: false, visor: 'wide', bulk: 0.93 },
+    // Herida: traje ligero dañado, sin casco (se lo sacó).
+    wounded: { armor: 'light', pack: false, pauldrons: false, visor: 'none', bulk: 0.95 },
+  };
+
+  // buildParts arma la geometría; buildMesh la sube a GPU y buildRaw devuelve
+  // los arreglos en CPU para exportar. Un solo cuerpo de código para ambos.
+  function buildParts(style) {
+    const sk = skeleton();
+    const S = STYLES[style] || STYLES.engineer;
+    const b = CM.builder(sk);
+    const k = S.bulk;
+
+    // --- torso: sección elíptica, más ancha que profunda
+    b.limb('root', 'spine', {
+      rx0: 0.155 * k, rz0: 0.115 * k, rx1: 0.165 * k, rz1: 0.120 * k,
+      seg: 16, rings: 3, material: CM.MAT_SUIT, parentBlend: 0, childBlend: 0.4,
+    });
+    b.limb('spine', 'chest', {
+      rx0: 0.165 * k, rz0: 0.120 * k, rx1: 0.195 * k, rz1: 0.135 * k,
+      seg: 16, rings: 4, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.35,
+    });
+    b.limb('chest', 'neck', {
+      rx0: 0.195 * k, rz0: 0.135 * k, rx1: 0.085 * k, rz1: 0.085 * k,
+      seg: 16, rings: 4, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.3,
+    });
+    b.limb('neck', 'head', {
+      rx0: 0.062 * k, rz0: 0.062 * k, rx1: 0.072 * k, rz1: 0.072 * k,
+      seg: 12, rings: 2, material: CM.MAT_RUBBER, parentBlend: 0.3, childBlend: 0.4,
+    });
+
+    // --- cabeza y casco
+    if (S.visor === 'none') {
+      b.blob('head', { r: 0.098 * k, ry: 0.115 * k, rz: 0.108 * k, offset: [0, 0.045, 0],
+        seg: 16, rings: 12, material: CM.MAT_RUBBER });
+      b.blob('head', { r: 0.030, offset: [0, 0.055, -0.095 * k], seg: 8, rings: 6,
+        material: CM.MAT_ACCENT });   // respirador
+    } else {
+      b.blob('head', { r: 0.118 * k, ry: 0.128 * k, rz: 0.126 * k, offset: [0, 0.050, 0],
+        seg: 18, rings: 14, material: CM.MAT_ARMOR });
+      const wide = S.visor === 'wide';
+      b.plate('head', {
+        size: [wide ? 0.165 : 0.130, 0.070, 0.045], offset: [0, 0.055, -0.105 * k],
+        rot: [-0.18, 0, 0], bevel: 0.010, material: CM.MAT_VISOR,
+      });
+      if (S.brow) {
+        b.plate('head', { size: [0.185, 0.032, 0.10], offset: [0, 0.128, -0.030],
+          rot: [0.22, 0, 0], bevel: 0.008, material: CM.MAT_ARMOR });
+      }
+      // Luz de casco: pequeña, emisiva, con acento del personaje.
+      b.blob('head', { r: 0.022, offset: [0.075 * k, 0.115, -0.070], seg: 8, rings: 6,
+        material: CM.MAT_ACCENT });
+    }
+
+    // --- brazos
+    for (const side of ['L', 'R']) {
+      const s = side === 'L' ? 1 : -1;
+      b.limb('clav' + side, 'arm' + side, {
+        rx0: 0.075 * k, rx1: 0.070 * k, seg: 10, rings: 2,
+        material: CM.MAT_SUIT, parentBlend: 0.2, childBlend: 0.5,
+      });
+      b.blob('arm' + side, { r: 0.083 * k, seg: 12, rings: 9, material: CM.MAT_SUIT,
+        weightWith: 'chest', weightAmount: 0.25 });
+      b.limb('arm' + side, 'fore' + side, {
+        rx0: 0.072 * k, rx1: 0.058 * k, seg: 12, rings: 5, bulge: 0.14,
+        material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.45,
+      });
+      b.blob('fore' + side, { r: 0.058 * k, seg: 10, rings: 8, material: CM.MAT_RUBBER });
+      b.limb('fore' + side, 'hand' + side, {
+        rx0: 0.056 * k, rx1: 0.046 * k, seg: 12, rings: 4, bulge: 0.10,
+        material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.4,
+      });
+      b.blob('hand' + side, { r: 0.050 * k, ry: 0.062 * k, rz: 0.038 * k,
+        offset: [0, -0.035, 0], seg: 10, rings: 8, material: CM.MAT_RUBBER });
+      // Antebrazo con panel: donde vive el HUD diegético del traje.
+      b.plate('fore' + side, {
+        size: [0.062, 0.115, 0.048], offset: [s * 0.026, -0.115, -0.012],
+        bevel: 0.007, material: side === 'L' ? CM.MAT_ACCENT : CM.MAT_ARMOR,
+      });
+      if (S.pauldrons) {
+        b.plate('arm' + side, {
+          size: [0.135 * k, 0.085, 0.145 * k], offset: [s * 0.028, 0.030, 0],
+          rot: [0, 0, -s * 0.28], bevel: 0.014, material: CM.MAT_ARMOR,
+          weightWith: 'chest', weightAmount: 0.2,
+        });
+      }
+    }
+
+    // --- piernas
+    for (const side of ['L', 'R']) {
+      const s = side === 'L' ? 1 : -1;
+      b.blob('thigh' + side, { r: 0.105 * k, seg: 12, rings: 9, material: CM.MAT_SUIT,
+        weightWith: 'root', weightAmount: 0.3 });
+      b.limb('thigh' + side, 'shin' + side, {
+        rx0: 0.105 * k, rz0: 0.100 * k, rx1: 0.078 * k, rz1: 0.078 * k,
+        seg: 12, rings: 5, bulge: 0.10,
+        material: CM.MAT_SUIT, parentBlend: 0.40, childBlend: 0.45,
+      });
+      b.blob('shin' + side, { r: 0.080 * k, seg: 12, rings: 9, material: CM.MAT_RUBBER });
+      b.limb('shin' + side, 'foot' + side, {
+        rx0: 0.078 * k, rx1: 0.058 * k, seg: 12, rings: 5, bulge: 0.12,
+        material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.45,
+      });
+      // Bota: suela gruesa, es lo que apoya en la arena.
+      b.plate('foot' + side, {
+        size: [0.105 * k, 0.075, 0.255 * k], offset: [0, -0.035, -0.045],
+        bevel: 0.012, material: CM.MAT_RUBBER,
+      });
+      b.plate('foot' + side, {
+        size: [0.112 * k, 0.030, 0.265 * k], offset: [0, -0.072, -0.045],
+        bevel: 0.010, material: CM.MAT_ARMOR,
+      });
+      if (S.armor === 'heavy') {
+        b.plate('thigh' + side, {
+          size: [0.115, 0.180, 0.075], offset: [s * 0.038, -0.170, -0.055],
+          rot: [0.10, 0, 0], bevel: 0.011, material: CM.MAT_ARMOR,
+        });
+        b.plate('shin' + side, {
+          size: [0.105, 0.220, 0.070], offset: [0, -0.185, -0.052],
+          rot: [-0.05, 0, 0], bevel: 0.011, material: CM.MAT_ARMOR,
+        });
+      }
+    }
+
+    // --- coraza y accesorios
+    if (S.armor === 'heavy') {
+      b.plate('chest', { size: [0.335 * k, 0.245, 0.115], offset: [0, 0.045, -0.075],
+        rot: [0.06, 0, 0], bevel: 0.016, material: CM.MAT_ARMOR });
+      b.plate('chest', { size: [0.115, 0.075, 0.045], offset: [0, 0.115, -0.135],
+        bevel: 0.008, material: CM.MAT_ACCENT });   // luz de pecho
+      b.plate('spine', { size: [0.290, 0.185, 0.085], offset: [0, 0.030, 0.078],
+        rot: [-0.05, 0, 0], bevel: 0.014, material: CM.MAT_ARMOR });
+    } else {
+      b.plate('chest', { size: [0.260 * k, 0.150, 0.085], offset: [0, 0.015, -0.088],
+        rot: [0.05, 0, 0], bevel: 0.012, material: CM.MAT_ARMOR });
+      b.plate('chest', { size: [0.085, 0.055, 0.035], offset: [0, 0.075, -0.128],
+        bevel: 0.006, material: CM.MAT_ACCENT });
+    }
+    // Cinturón: separa torso de piernas y da lectura de silueta.
+    b.limb('root', 'spine', {
+      rx0: 0.168 * k, rz0: 0.128 * k, rx1: 0.168 * k, rz1: 0.128 * k,
+      seg: 16, rings: 1, material: CM.MAT_RUBBER, parentBlend: 0, childBlend: 0,
+      offsetB: [0, -0.115, 0],
+    });
+    if (S.pack) {
+      b.plate('chest', { size: [0.245, 0.320, 0.135], offset: [0, -0.010, 0.150],
+        bevel: 0.016, material: CM.MAT_ARMOR });
+      b.plate('chest', { size: [0.070, 0.130, 0.055], offset: [0.085, 0.120, 0.215],
+        bevel: 0.008, material: CM.MAT_RUBBER });
+      b.plate('chest', { size: [0.070, 0.130, 0.055], offset: [-0.085, 0.120, 0.215],
+        bevel: 0.008, material: CM.MAT_RUBBER });
+    }
+
+    return b;
+  }
+
+  function buildMesh(style) {
+    const mesh = buildParts(style).build();
+    mesh.style = style;
+    return mesh;
+  }
+
+  function buildRaw(style) {
+    return buildParts(style).raw();
+  }
+
+  // ------------------------------------------------------------------ clips
+  // Un ciclo de marcha de manual: contacto, apoyo medio, despegue, balanceo.
+  const CLIP_SPECS = {
+    idle: {
+      name: 'idle', duration: 5.0, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.940, 0], [2.5, 0, 0.926, 0], [5, 0, 0.940, 0]] },
+        spine: { rot: [[0, 1, 0, 0], [2.5, 3.5, 0, 0], [5, 1, 0, 0]] },
+        chest: { rot: [[0, -1, 2, 0], [2.5, -3, -2, 0], [5, -1, 2, 0]] },
+        head: { rot: [[0, 2, -4, 0], [1.6, 0, 6, 0], [3.4, 3, -2, 0], [5, 2, -4, 0]] },
+        armL: { rot: [[0, -4, 0, 7], [2.5, -1, 0, 9], [5, -4, 0, 7]] },
+        armR: { rot: [[0, -4, 0, -7], [2.5, -1, 0, -9], [5, -4, 0, -7]] },
+        foreL: { rot: [[0, -14, 0, 0], [2.5, -19, 0, 0], [5, -14, 0, 0]] },
+        foreR: { rot: [[0, -16, 0, 0], [2.5, -21, 0, 0], [5, -16, 0, 0]] },
+        thighL: { rot: [[0, 1, 0, 2], [5, 1, 0, 2]] },
+        thighR: { rot: [[0, -1, 0, -2], [5, -1, 0, -2]] },
+        shinL: { rot: [[0, -3, 0, 0], [5, -3, 0, 0]] },
+        shinR: { rot: [[0, -3, 0, 0], [5, -3, 0, 0]] },
+      },
+    },
+
+    walk: {
+      name: 'walk', duration: 1.05, loop: true,
+      tracks: {
+        root: {
+          pos: [[0, 0, 0.928, 0], [0.25, 0, 0.951, 0], [0.5, 0, 0.928, 0],
+                [0.75, 0, 0.951, 0], [1.05, 0, 0.928, 0]],
+          rot: [[0, 0, 3, 0], [0.5, 0, -3, 0], [1.05, 0, 3, 0]],
+        },
+        spine: { rot: [[0, 3, -2, 0], [0.5, 3, 2, 0], [1.05, 3, -2, 0]] },
+        chest: { rot: [[0, -2, 5, 0], [0.5, -2, -5, 0], [1.05, -2, 5, 0]] },
+        head: { rot: [[0, 1, -3, 0], [0.5, 1, 3, 0], [1.05, 1, -3, 0]] },
+
+        thighL: { rot: [[0, 24, 0, 2], [0.5, -18, 0, 2], [1.05, 24, 0, 2]] },
+        shinL: { rot: [[0, -10, 0, 0], [0.14, -6, 0, 0], [0.55, -12, 0, 0],
+                       [0.78, -58, 0, 0], [1.05, -10, 0, 0]] },
+        footL: { rot: [[0, -12, 0, 0], [0.20, 6, 0, 0], [0.55, 18, 0, 0],
+                       [0.80, -6, 0, 0], [1.05, -12, 0, 0]] },
+
+        thighR: { rot: [[0, -18, 0, -2], [0.5, 24, 0, -2], [1.05, -18, 0, -2]] },
+        shinR: { rot: [[0, -12, 0, 0], [0.26, -58, 0, 0], [0.52, -10, 0, 0],
+                       [0.66, -6, 0, 0], [1.05, -12, 0, 0]] },
+        footR: { rot: [[0, 18, 0, 0], [0.28, -6, 0, 0], [0.52, -12, 0, 0],
+                       [0.72, 6, 0, 0], [1.05, 18, 0, 0]] },
+
+        armL: { rot: [[0, -24, 0, 8], [0.5, 20, 0, 8], [1.05, -24, 0, 8]] },
+        foreL: { rot: [[0, -16, 0, 0], [0.5, -36, 0, 0], [1.05, -16, 0, 0]] },
+        armR: { rot: [[0, 20, 0, -8], [0.5, -24, 0, -8], [1.05, 20, 0, -8]] },
+        foreR: { rot: [[0, -36, 0, 0], [0.5, -16, 0, 0], [1.05, -36, 0, 0]] },
+      },
+    },
+
+    run: {
+      name: 'run', duration: 0.68, loop: true,
+      tracks: {
+        root: {
+          pos: [[0, 0, 0.910, 0], [0.17, 0, 0.960, 0], [0.34, 0, 0.910, 0],
+                [0.51, 0, 0.960, 0], [0.68, 0, 0.910, 0]],
+          rot: [[0, 9, 5, 0], [0.34, 9, -5, 0], [0.68, 9, 5, 0]],
+        },
+        spine: { rot: [[0, 7, -4, 0], [0.34, 7, 4, 0], [0.68, 7, -4, 0]] },
+        chest: { rot: [[0, 5, 9, 0], [0.34, 5, -9, 0], [0.68, 5, 9, 0]] },
+        head: { rot: [[0, -9, -4, 0], [0.34, -9, 4, 0], [0.68, -9, -4, 0]] },
+
+        thighL: { rot: [[0, 46, 0, 3], [0.34, -30, 0, 3], [0.68, 46, 0, 3]] },
+        shinL: { rot: [[0, -34, 0, 0], [0.10, -12, 0, 0], [0.40, -30, 0, 0],
+                       [0.52, -104, 0, 0], [0.68, -34, 0, 0]] },
+        footL: { rot: [[0, -16, 0, 0], [0.14, 10, 0, 0], [0.40, 24, 0, 0], [0.68, -16, 0, 0]] },
+
+        thighR: { rot: [[0, -30, 0, -3], [0.34, 46, 0, -3], [0.68, -30, 0, -3]] },
+        shinR: { rot: [[0, -30, 0, 0], [0.18, -104, 0, 0], [0.34, -34, 0, 0],
+                       [0.44, -12, 0, 0], [0.68, -30, 0, 0]] },
+        footR: { rot: [[0, 24, 0, 0], [0.20, -16, 0, 0], [0.48, 10, 0, 0], [0.68, 24, 0, 0]] },
+
+        armL: { rot: [[0, -52, 0, 10], [0.34, 44, 0, 10], [0.68, -52, 0, 10]] },
+        foreL: { rot: [[0, -62, 0, 0], [0.34, -86, 0, 0], [0.68, -62, 0, 0]] },
+        armR: { rot: [[0, 44, 0, -10], [0.34, -52, 0, -10], [0.68, 44, 0, -10]] },
+        foreR: { rot: [[0, -86, 0, 0], [0.34, -62, 0, 0], [0.68, -86, 0, 0]] },
+      },
+    },
+
+    jump: {
+      name: 'jump', duration: 0.45, loop: false,
+      tracks: {
+        root: { pos: [[0, 0, 0.890, 0], [0.45, 0, 0.960, 0]] },
+        spine: { rot: [[0, 14, 0, 0], [0.45, -6, 0, 0]] },
+        thighL: { rot: [[0, 42, 0, 2], [0.45, 18, 0, 2]] },
+        shinL: { rot: [[0, -78, 0, 0], [0.45, -26, 0, 0]] },
+        thighR: { rot: [[0, 38, 0, -2], [0.45, 8, 0, -2]] },
+        shinR: { rot: [[0, -72, 0, 0], [0.45, -34, 0, 0]] },
+        armL: { rot: [[0, -40, 0, 14], [0.45, -96, 0, 22]] },
+        armR: { rot: [[0, -40, 0, -14], [0.45, -96, 0, -22]] },
+        foreL: { rot: [[0, -30, 0, 0], [0.45, -18, 0, 0]] },
+        foreR: { rot: [[0, -30, 0, 0], [0.45, -18, 0, 0]] },
+      },
+    },
+
+    fall: {
+      name: 'fall', duration: 1.2, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.945, 0], [1.2, 0, 0.945, 0]] },
+        spine: { rot: [[0, -6, 0, 0], [0.6, -3, 0, 0], [1.2, -6, 0, 0]] },
+        thighL: { rot: [[0, 26, 0, 4], [0.6, 16, 0, 4], [1.2, 26, 0, 4]] },
+        shinL: { rot: [[0, -40, 0, 0], [0.6, -28, 0, 0], [1.2, -40, 0, 0]] },
+        thighR: { rot: [[0, 12, 0, -4], [0.6, 22, 0, -4], [1.2, 12, 0, -4]] },
+        shinR: { rot: [[0, -30, 0, 0], [0.6, -44, 0, 0], [1.2, -30, 0, 0]] },
+        armL: { rot: [[0, -104, 0, 26], [0.6, -92, 0, 32], [1.2, -104, 0, 26]] },
+        armR: { rot: [[0, -104, 0, -26], [0.6, -92, 0, -32], [1.2, -104, 0, -26]] },
+        foreL: { rot: [[0, -34, 0, 0], [1.2, -34, 0, 0]] },
+        foreR: { rot: [[0, -34, 0, 0], [1.2, -34, 0, 0]] },
+      },
+    },
+
+    land: {
+      name: 'land', duration: 0.40, loop: false,
+      tracks: {
+        root: { pos: [[0, 0, 0.900, 0], [0.12, 0, 0.815, 0], [0.40, 0, 0.940, 0]] },
+        spine: { rot: [[0, 10, 0, 0], [0.12, 22, 0, 0], [0.40, 2, 0, 0]] },
+        thighL: { rot: [[0, 30, 0, 3], [0.12, 54, 0, 3], [0.40, 2, 0, 3]] },
+        shinL: { rot: [[0, -46, 0, 0], [0.12, -86, 0, 0], [0.40, -6, 0, 0]] },
+        thighR: { rot: [[0, 30, 0, -3], [0.12, 54, 0, -3], [0.40, 2, 0, -3]] },
+        shinR: { rot: [[0, -46, 0, 0], [0.12, -86, 0, 0], [0.40, -6, 0, 0]] },
+        armL: { rot: [[0, -60, 0, 20], [0.12, -30, 0, 28], [0.40, -6, 0, 8]] },
+        armR: { rot: [[0, -60, 0, -20], [0.12, -30, 0, -28], [0.40, -6, 0, -8]] },
+      },
+    },
+
+    dodge: {
+      name: 'dodge', duration: 0.42, loop: false,
+      tracks: {
+        root: { pos: [[0, 0, 0.930, 0], [0.16, 0, 0.780, 0], [0.42, 0, 0.935, 0]] },
+        spine: { rot: [[0, 6, 0, 0], [0.16, 34, 0, 0], [0.42, 4, 0, 0]] },
+        chest: { rot: [[0, 0, 0, 0], [0.16, 18, 0, 0], [0.42, 0, 0, 0]] },
+        head: { rot: [[0, 0, 0, 0], [0.16, -24, 0, 0], [0.42, 0, 0, 0]] },
+        thighL: { rot: [[0, 4, 0, 3], [0.16, 74, 0, 3], [0.42, 4, 0, 3]] },
+        shinL: { rot: [[0, -8, 0, 0], [0.16, -96, 0, 0], [0.42, -8, 0, 0]] },
+        thighR: { rot: [[0, 4, 0, -3], [0.16, 40, 0, -3], [0.42, 4, 0, -3]] },
+        shinR: { rot: [[0, -8, 0, 0], [0.16, -70, 0, 0], [0.42, -8, 0, 0]] },
+        armL: { rot: [[0, -10, 0, 8], [0.16, -76, 0, 30], [0.42, -10, 0, 8]] },
+        armR: { rot: [[0, -10, 0, -8], [0.16, -76, 0, -30], [0.42, -10, 0, -8]] },
+        foreL: { rot: [[0, -16, 0, 0], [0.16, -104, 0, 0], [0.42, -16, 0, 0]] },
+        foreR: { rot: [[0, -16, 0, 0], [0.16, -104, 0, 0], [0.42, -16, 0, 0]] },
+      },
+    },
+
+    // Capa superior: apuntar. Sólo toca torso y brazos, así las piernas siguen
+    // caminando o corriendo debajo.
+    aim: {
+      name: 'aim', duration: 1.0, loop: true,
+      tracks: {
+        chest: { rot: [[0, 0, -18, 0], [1.0, 0, -18, 0]] },
+        armR: { rot: [[0, -74, -14, -16], [0.5, -72, -14, -16], [1.0, -74, -14, -16]] },
+        foreR: { rot: [[0, -62, 22, 0], [1.0, -62, 22, 0]] },
+        armL: { rot: [[0, -68, 34, 30], [1.0, -68, 34, 30]] },
+        foreL: { rot: [[0, -80, -18, 0], [1.0, -80, -18, 0]] },
+        head: { rot: [[0, -4, -10, 0], [1.0, -4, -10, 0]] },
+      },
+    },
+
+    fire: {
+      name: 'fire', duration: 0.22, loop: false,
+      tracks: {
+        armR: { rot: [[0, -74, -14, -16], [0.04, -86, -14, -16], [0.22, -74, -14, -16]] },
+        foreR: { rot: [[0, -62, 22, 0], [0.04, -48, 22, 0], [0.22, -62, 22, 0]] },
+        chest: { rot: [[0, 0, -18, 0], [0.04, -6, -20, 0], [0.22, 0, -18, 0]] },
+      },
+    },
+
+    reload: {
+      name: 'reload', duration: 1.5, loop: false,
+      tracks: {
+        armR: { rot: [[0, -74, -14, -16], [0.3, -50, -20, -10], [1.1, -50, -20, -10], [1.5, -74, -14, -16]] },
+        foreR: { rot: [[0, -62, 22, 0], [0.3, -84, 30, 0], [1.1, -84, 30, 0], [1.5, -62, 22, 0]] },
+        armL: { rot: [[0, -68, 34, 30], [0.35, -30, 20, 40], [0.7, -86, 40, 26], [1.5, -68, 34, 30]] },
+        foreL: { rot: [[0, -80, -18, 0], [0.35, -120, -10, 0], [0.7, -60, -24, 0], [1.5, -80, -18, 0]] },
+        head: { rot: [[0, -4, -10, 0], [0.4, 14, -6, 0], [1.0, 12, -8, 0], [1.5, -4, -10, 0]] },
+      },
+    },
+
+    // Escalada del titán: colgado de una placa, un brazo arriba.
+    climb: {
+      name: 'climb', duration: 1.6, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.920, 0], [0.8, 0, 0.950, 0], [1.6, 0, 0.920, 0]] },
+        spine: { rot: [[0, -8, 6, 0], [0.8, -8, -6, 0], [1.6, -8, 6, 0]] },
+        armL: { rot: [[0, -158, 0, 16], [0.8, -132, 0, 24], [1.6, -158, 0, 16]] },
+        foreL: { rot: [[0, -36, 0, 0], [0.8, -66, 0, 0], [1.6, -36, 0, 0]] },
+        armR: { rot: [[0, -132, 0, -24], [0.8, -158, 0, -16], [1.6, -132, 0, -24]] },
+        foreR: { rot: [[0, -66, 0, 0], [0.8, -36, 0, 0], [1.6, -66, 0, 0]] },
+        thighL: { rot: [[0, 44, 0, 8], [0.8, 20, 0, 8], [1.6, 44, 0, 8]] },
+        shinL: { rot: [[0, -70, 0, 0], [0.8, -40, 0, 0], [1.6, -70, 0, 0]] },
+        thighR: { rot: [[0, 20, 0, -8], [0.8, 44, 0, -8], [1.6, 20, 0, -8]] },
+        shinR: { rot: [[0, -40, 0, 0], [0.8, -70, 0, 0], [1.6, -40, 0, 0]] },
+        head: { rot: [[0, -22, 0, 0], [1.6, -22, 0, 0]] },
+      },
+    },
+
+    death: {
+      name: 'death', duration: 1.3, loop: false,
+      tracks: {
+        root: { pos: [[0, 0, 0.930, 0], [0.5, 0, 0.560, 0], [1.3, 0, 0.300, 0]],
+                rot: [[0, 0, 0, 0], [1.3, -12, 20, 0]] },
+        spine: { rot: [[0, 0, 0, 0], [0.5, 26, 0, 10], [1.3, 42, 0, 18]] },
+        chest: { rot: [[0, 0, 0, 0], [1.3, 24, 0, 12]] },
+        head: { rot: [[0, 0, 0, 0], [0.4, -24, 0, 0], [1.3, 30, 0, 14]] },
+        armL: { rot: [[0, -10, 0, 8], [0.4, -70, 0, 40], [1.3, -14, 0, 52]] },
+        armR: { rot: [[0, -10, 0, -8], [0.4, -60, 0, -30], [1.3, -8, 0, -46]] },
+        thighL: { rot: [[0, 0, 0, 2], [0.5, 50, 0, 8], [1.3, 72, 0, 14]] },
+        shinL: { rot: [[0, -4, 0, 0], [1.3, -84, 0, 0]] },
+        thighR: { rot: [[0, 0, 0, -2], [0.5, 34, 0, -6], [1.3, 54, 0, -10]] },
+        shinR: { rot: [[0, -4, 0, 0], [1.3, -68, 0, 0]] },
+      },
+    },
+
+    // --- clips de campamento (los supervivientes)
+    sit: {
+      name: 'sit', duration: 6.0, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.470, 0], [3, 0, 0.462, 0], [6, 0, 0.470, 0]] },
+        spine: { rot: [[0, 16, 0, 0], [3, 20, 0, 0], [6, 16, 0, 0]] },
+        chest: { rot: [[0, 6, 3, 0], [3, 4, -3, 0], [6, 6, 3, 0]] },
+        head: { rot: [[0, -6, -8, 0], [2, 4, 10, 0], [4.2, -2, 2, 0], [6, -6, -8, 0]] },
+        thighL: { rot: [[0, 86, 0, 9], [6, 86, 0, 9]] },
+        shinL: { rot: [[0, -88, 0, 0], [6, -88, 0, 0]] },
+        footL: { rot: [[0, 8, 0, 0], [6, 8, 0, 0]] },
+        thighR: { rot: [[0, 84, 0, -12], [6, 84, 0, -12]] },
+        shinR: { rot: [[0, -92, 0, 0], [6, -92, 0, 0]] },
+        footR: { rot: [[0, 10, 0, 0], [6, 10, 0, 0]] },
+        armL: { rot: [[0, -34, 0, 22], [3, -30, 0, 24], [6, -34, 0, 22]] },
+        foreL: { rot: [[0, -74, 0, 0], [3, -80, 0, 0], [6, -74, 0, 0]] },
+        armR: { rot: [[0, -34, 0, -22], [3, -30, 0, -24], [6, -34, 0, -22]] },
+        foreR: { rot: [[0, -74, 0, 0], [3, -80, 0, 0], [6, -74, 0, 0]] },
+      },
+    },
+
+    // Reparando algo en el suelo: en cuclillas, manos ocupadas.
+    work: {
+      name: 'work', duration: 3.2, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.610, 0], [1.6, 0, 0.592, 0], [3.2, 0, 0.610, 0]] },
+        spine: { rot: [[0, 30, 0, 0], [1.6, 34, 0, 0], [3.2, 30, 0, 0]] },
+        chest: { rot: [[0, 14, 4, 0], [1.6, 16, -4, 0], [3.2, 14, 4, 0]] },
+        head: { rot: [[0, 26, -6, 0], [1.6, 30, 6, 0], [3.2, 26, -6, 0]] },
+        thighL: { rot: [[0, 104, 0, 14], [3.2, 104, 0, 14]] },
+        shinL: { rot: [[0, -128, 0, 0], [3.2, -128, 0, 0]] },
+        footL: { rot: [[0, 26, 0, 0], [3.2, 26, 0, 0]] },
+        thighR: { rot: [[0, 96, 0, -16], [3.2, 96, 0, -16]] },
+        shinR: { rot: [[0, -122, 0, 0], [3.2, -122, 0, 0]] },
+        footR: { rot: [[0, 24, 0, 0], [3.2, 24, 0, 0]] },
+        armL: { rot: [[0, -62, 12, 24], [0.8, -50, 18, 20], [1.6, -66, 8, 26], [3.2, -62, 12, 24]] },
+        foreL: { rot: [[0, -78, 0, 0], [0.8, -96, 0, 0], [1.6, -70, 0, 0], [3.2, -78, 0, 0]] },
+        armR: { rot: [[0, -58, -14, -22], [1.0, -68, -8, -26], [2.1, -52, -18, -18], [3.2, -58, -14, -22]] },
+        foreR: { rot: [[0, -84, 0, 0], [1.0, -66, 0, 0], [2.1, -92, 0, 0], [3.2, -84, 0, 0]] },
+      },
+    },
+
+    // De guardia: rifle en bajo, barrido lento del horizonte.
+    guard: {
+      name: 'guard', duration: 7.0, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.936, 0], [3.5, 0, 0.930, 0], [7, 0, 0.936, 0]] },
+        spine: { rot: [[0, 2, -6, 0], [3.5, 2, 6, 0], [7, 2, -6, 0]] },
+        chest: { rot: [[0, -2, -10, 0], [3.5, -2, 10, 0], [7, -2, -10, 0]] },
+        head: { rot: [[0, 0, -18, 0], [1.8, -2, 4, 0], [4.0, 0, 20, 0], [7, 0, -18, 0]] },
+        armR: { rot: [[0, -30, -10, -14], [3.5, -34, -10, -12], [7, -30, -10, -14]] },
+        foreR: { rot: [[0, -86, 26, 0], [3.5, -82, 26, 0], [7, -86, 26, 0]] },
+        armL: { rot: [[0, -46, 24, 26], [3.5, -50, 24, 24], [7, -46, 24, 26]] },
+        foreL: { rot: [[0, -96, -14, 0], [3.5, -92, -14, 0], [7, -96, -14, 0]] },
+        thighL: { rot: [[0, 2, 0, 4], [7, 2, 0, 4]] },
+        thighR: { rot: [[0, -2, 0, -5], [7, -2, 0, -5]] },
+        shinL: { rot: [[0, -5, 0, 0], [7, -5, 0, 0]] },
+        shinR: { rot: [[0, -4, 0, 0], [7, -4, 0, 0]] },
+      },
+    },
+
+    // Herida: sentada contra una caja, sosteniéndose el costado.
+    hurt: {
+      name: 'hurt', duration: 4.4, loop: true,
+      tracks: {
+        root: { pos: [[0, 0, 0.430, 0], [2.2, 0, 0.420, 0], [4.4, 0, 0.430, 0]],
+                rot: [[0, -14, 0, 6], [4.4, -14, 0, 6]] },
+        spine: { rot: [[0, 22, 0, -8], [2.2, 26, 0, -10], [4.4, 22, 0, -8]] },
+        chest: { rot: [[0, 10, 0, -6], [2.2, 14, 0, -8], [4.4, 10, 0, -6]] },
+        head: { rot: [[0, 16, 8, -4], [2.2, 22, -4, -6], [4.4, 16, 8, -4]] },
+        thighL: { rot: [[0, 78, 0, 16], [4.4, 78, 0, 16]] },
+        shinL: { rot: [[0, -62, 0, 0], [4.4, -62, 0, 0]] },
+        thighR: { rot: [[0, 70, 0, -20], [4.4, 70, 0, -20]] },
+        shinR: { rot: [[0, -54, 0, 0], [4.4, -54, 0, 0]] },
+        armL: { rot: [[0, -52, 26, 30], [2.2, -56, 28, 32], [4.4, -52, 26, 30]] },
+        foreL: { rot: [[0, -96, -30, 0], [2.2, -100, -32, 0], [4.4, -96, -30, 0]] },
+        armR: { rot: [[0, -18, 0, -14], [4.4, -18, 0, -14]] },
+        foreR: { rot: [[0, -34, 0, 0], [4.4, -34, 0, 0]] },
+      },
+    },
+
+    wave: {
+      name: 'wave', duration: 2.2, loop: false,
+      tracks: {
+        armL: { rot: [[0, -10, 0, 8], [0.35, -146, 0, 34], [0.8, -150, 0, 30],
+                      [1.2, -146, 0, 38], [1.6, -150, 0, 30], [2.2, -10, 0, 8]] },
+        foreL: { rot: [[0, -16, 0, 0], [0.35, -28, 0, 0], [2.2, -16, 0, 0]] },
+        chest: { rot: [[0, 0, 0, 0], [0.6, 0, 12, 0], [1.6, 0, 12, 0], [2.2, 0, 0, 0]] },
+        head: { rot: [[0, 0, 0, 0], [0.6, -6, 14, 0], [1.6, -6, 14, 0], [2.2, 0, 0, 0]] },
+      },
+    },
+  };
+
+  let _clips = null;
+  function clips() {
+    if (!_clips) {
+      _clips = {};
+      for (const key in CLIP_SPECS) _clips[key] = EV.Anim.createClip(CLIP_SPECS[key]);
+    }
+    return _clips;
+  }
+
+  // ---------------------------------------------------------------- instancia
+  const MESH_CACHE = Object.create(null);
+  function meshFor(style) {
+    if (!MESH_CACHE[style]) MESH_CACHE[style] = buildMesh(style);
+    return MESH_CACHE[style];
+  }
+
+  // Paletas: cada personaje se reconoce a distancia por su acento.
+  const PALETTES = {
+    engineer: { suit: [0.088, 0.086, 0.082], armor: [0.315, 0.300, 0.272], accent: [1.05, 0.42, 0.10] },
+    soldier: { suit: [0.070, 0.074, 0.078], armor: [0.245, 0.255, 0.268], accent: [0.20, 0.62, 1.15] },
+    technician: { suit: [0.095, 0.090, 0.078], armor: [0.360, 0.335, 0.280], accent: [1.20, 0.95, 0.22] },
+    wounded: { suit: [0.082, 0.078, 0.076], armor: [0.290, 0.275, 0.262], accent: [0.95, 0.20, 0.16] },
+  };
+
+  function create(style, opts = {}) {
+    const sk = skeleton();
+    const c = {
+      style,
+      mesh: meshFor(style),
+      skeleton: sk,
+      pose: EV.Anim.createPose(sk),
+      animator: EV.Anim.createAnimator(sk, clips()),
+      skin: EV.Anim.createSkinInstance(sk),
+      pos: V3.create(opts.pos ? opts.pos[0] : 0, opts.pos ? opts.pos[1] : 0, opts.pos ? opts.pos[2] : 0),
+      yaw: opts.yaw || 0,
+      scale: opts.scale || 1,
+      palette: Object.assign({}, PALETTES[style] || PALETTES.engineer, opts.palette || {}),
+      visible: true,
+      lookAt: null,           // objetivo para la mirada
+      lookWeight: 0,
+      model: EV.M4.create(),
+      prevModel: EV.M4.create(),
+      name: opts.name || style,
+    };
+    c.animator.play(opts.clip || 'idle', { offset: opts.offset || 0 });
+
+    const _rot = V3.create();
+    const _q = Q.create(), _qh = Q.create();
+
+    // Mirada: rota cabeza y pecho hacia un objetivo, con límite de giro. Es
+    // barato y es lo que hace que un NPC parado deje de parecer una estatua.
+    function applyLookAt() {
+      if (!c.lookAt || c.lookWeight < 0.01) return;
+      const dx = c.lookAt[0] - c.pos[0];
+      const dz = c.lookAt[2] - c.pos[2];
+      const dy = c.lookAt[1] - (c.pos[1] + 1.5 * c.scale);
+      const targetYaw = M.wrapAngle(Math.atan2(dx, dz) - c.yaw);
+      const dist = Math.hypot(dx, dz);
+      const targetPitch = -Math.atan2(dy, Math.max(dist, 0.2));
+      // Fuera de ~100° el personaje no gira la cabeza: se quedaría antinatural.
+      const reach = M.clamp(1 - Math.abs(targetYaw) / 1.75, 0, 1) * c.lookWeight;
+      if (reach < 0.01) return;
+
+      const yawHead = M.clamp(targetYaw, -1.0, 1.0) * reach;
+      const pitchHead = M.clamp(targetPitch, -0.6, 0.6) * reach;
+      const iHead = sk.index.head, iChest = sk.index.chest;
+
+      Q.fromEuler(_qh, pitchHead * 0.65, yawHead * 0.62, 0);
+      Q.multiply(_q, c.pose.rot.subarray(iHead * 4, iHead * 4 + 4), _qh);
+      c.pose.rot.set(_q, iHead * 4);
+
+      Q.fromEuler(_qh, pitchHead * 0.18, yawHead * 0.30, 0);
+      Q.multiply(_q, c.pose.rot.subarray(iChest * 4, iChest * 4 + 4), _qh);
+      c.pose.rot.set(_q, iChest * 4);
+    }
+
+    c.update = function (dt) {
+      c.animator.update(dt);
+      c.animator.apply(c.pose);
+      applyLookAt();
+      EV.M4.copy(c.prevModel, c.model);
+      V3.set(_rot, 0, c.yaw, 0);
+      EV.M4.compose(c.model, c.pos, _rot, V3.create(c.scale, c.scale, c.scale));
+      c.skin.computeMatrices(c.pose, c.model);
+      c.skin.upload();
+    };
+
+    c.bonePos = function (name, out) {
+      return c.skin.boneWorldPos(sk.bone(name), out);
+    };
+
+    return c;
+  }
+
+  EV.Characters = {
+    skeleton, clips, create, buildMesh, buildRaw, meshFor,
+    BONES, STYLES, PALETTES, CLIP_SPECS,
+  };
 })(window.EV = window.EV || {});
 
 /* ===== 52-props.js ===== */
@@ -1748,6 +3131,31 @@ void main(){
       }
       const data = new Float32Array(inst);
       groups.push({ mesh: spireVariants[v], data, count: data.length / 8 });
+    }
+
+    // --- rocas: rompen la monotonía de la duna y dan escala de cerca --------
+    const rockVariants = [];
+    for (let v = 0; v < 3; v++) rockVariants.push(EV.Geo.rock(seed + 3100 + v * 617));
+    for (let v = 0; v < rockVariants.length; v++) {
+      const inst = [];
+      let attempts = 0;
+      while (inst.length / 8 < 700 && attempts < 30000) {
+        attempts++;
+        const x = (noise.rand() * 2 - 1) * terrain.HALF * 0.95;
+        const z = (noise.rand() * 2 - 1) * terrain.HALF * 0.95;
+        if (Math.hypot(x, z) < 150) continue;
+        const slope = terrain.slopeAt(x, z);
+        // Las rocas se acumulan donde la arena no se queda: pendientes medias.
+        if (noise.rand() > 0.15 + slope * 2.2) continue;
+        const y = terrain.heightAt(x, z);
+        const sy = 0.35 + noise.rand() * noise.rand() * 3.2;
+        const sxz = sy * (0.9 + noise.rand() * 0.8);
+        const rot = noise.rand() * Math.PI * 2;
+        // Semienterradas: una roca apoyada encima se ve pegada.
+        inst.push(x, y - sy * 0.30, z, sy, Math.sin(rot), Math.cos(rot), sxz, noise.rand());
+      }
+      const data = new Float32Array(inst);
+      groups.push({ mesh: rockVariants[v], data, count: data.length / 8, rock: true });
     }
 
     // --- chatarra de la Meridiano -------------------------------------------
@@ -1807,8 +3215,8 @@ void main(){
 
     function draw(filter) {
       for (const g of groups) {
-        if (filter === 'crystal' && g.debris) continue;
-        if (filter === 'debris' && !g.debris) continue;
+        const kind = g.debris ? 'debris' : (g.rock ? 'rock' : 'crystal');
+        if (filter && filter !== kind) continue;
         if (g.count === 0) continue;
         gl.bindVertexArray(g.vao);
         gl.drawElementsInstanced(gl.TRIANGLES, g.mesh.indexCount, g.mesh.indexType, 0, g.count);
@@ -1821,11 +3229,379 @@ void main(){
   EV.Props = { create };
 })(window.EV = window.EV || {});
 
+/* ===== 56-particles.js ===== */
+// Ecos del Vacío — partículas.
+// Simulación en CPU sobre un pool fijo, dibujo en una sola llamada instanciada.
+// Los billboards se suavizan contra la profundidad de la escena para que no
+// aparezca el borde duro del quad al cruzar el suelo.
+(function (EV) {
+  'use strict';
+
+  const V3 = EV.V3, M = EV.MathUtil;
+
+  const VS = /* glsl */`
+#include <common>
+layout(location=0) in vec2 aCorner;
+layout(location=1) in vec4 aPosSize;    // xyz posición, w tamaño
+layout(location=2) in vec4 aColor;      // rgb color, a alfa
+layout(location=3) in vec4 aParams;     // x rotación, y brillo, z tipo, w semilla
+
+uniform mat4 uViewProj;
+uniform vec3 uCamRight;
+uniform vec3 uCamUp;
+
+out vec2  vUV;
+out vec4  vColor;
+out float vGlow;
+out vec4  vClip;
+
+void main(){
+  float c = cos(aParams.x), s = sin(aParams.x);
+  vec2 rot = vec2(aCorner.x * c - aCorner.y * s, aCorner.x * s + aCorner.y * c);
+  vec3 world = aPosSize.xyz
+             + uCamRight * (rot.x * aPosSize.w)
+             + uCamUp    * (rot.y * aPosSize.w);
+  vUV = aCorner * 0.5 + 0.5;
+  vColor = aColor;
+  vGlow = aParams.y;
+  vClip = uViewProj * vec4(world, 1.0);
+  gl_Position = vClip;
+}`;
+
+  const FS = /* glsl */`
+#include <common>
+in vec2  vUV;
+in vec4  vColor;
+in float vGlow;
+in vec4  vClip;
+
+uniform sampler2D uSceneDepth;
+uniform vec2  uScreenSize;
+uniform float uNear;
+uniform float uFar;
+uniform vec3  uSunDir;
+uniform vec3  uSunRadiance;
+
+layout(location=0) out vec4 oColor;
+
+void main(){
+  // Disco suave con núcleo denso: más creíble que un gaussiano puro para polvo.
+  vec2 d = vUV * 2.0 - 1.0;
+  float r2 = dot(d, d);
+  if(r2 > 1.0) discard;
+  float shape = pow(1.0 - r2, 1.5);
+
+  // Suavizado contra la escena: evita el corte recto donde el quad atraviesa
+  // el suelo, que es lo que delata que una nube de polvo son cuadrados.
+  vec2 uv = gl_FragCoord.xy / uScreenSize;
+  float sceneD = texture(uSceneDepth, uv).r;
+  float sceneZ = linearizeDepth(sceneD, uNear, uFar);
+  float fragZ = linearizeDepth(gl_FragCoord.z, uNear, uFar);
+  float soft = saturate((sceneZ - fragZ) / 1.4);
+
+  float alpha = vColor.a * shape * soft;
+  if(alpha < 0.002) discard;
+
+  // El polvo dispersa luz solar: se enciende mirando hacia el sol.
+  vec3 lit = vColor.rgb * (uSunRadiance * 0.16 + vec3(0.10, 0.09, 0.10));
+  lit += vColor.rgb * vGlow;
+
+  oColor = vec4(lit * alpha, alpha);
+}`;
+
+  const MAX = 3000;
+
+  function create() {
+    const gl = EV.GL.ctx;
+    const prog = EV.GL.program(VS, FS, 'partículas');
+
+    // Quad unitario compartido; el resto viaja por instancia.
+    const corners = new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]);
+    const cornerBuf = EV.GL.buffer(gl.ARRAY_BUFFER, corners);
+    const idxBuf = EV.GL.buffer(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]));
+
+    // 12 floats por instancia: posSize(4) + color(4) + params(4)
+    const data = new Float32Array(MAX * 12);
+    const instBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+    for (let i = 0; i < 3; i++) {
+      gl.enableVertexAttribArray(1 + i);
+      gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, 48, i * 16);
+      gl.vertexAttribDivisor(1 + i, 1);
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bindVertexArray(null);
+
+    // Estado de simulación en arreglos planos (sin objetos por partícula).
+    const px = new Float32Array(MAX), py = new Float32Array(MAX), pz = new Float32Array(MAX);
+    const vx = new Float32Array(MAX), vy = new Float32Array(MAX), vz = new Float32Array(MAX);
+    const life = new Float32Array(MAX), maxLife = new Float32Array(MAX);
+    const size0 = new Float32Array(MAX), size1 = new Float32Array(MAX);
+    const cr = new Float32Array(MAX), cg = new Float32Array(MAX), cb = new Float32Array(MAX);
+    const alpha0 = new Float32Array(MAX), glow = new Float32Array(MAX);
+    const rot = new Float32Array(MAX), rotV = new Float32Array(MAX);
+    const drag = new Float32Array(MAX), grav = new Float32Array(MAX);
+    let count = 0;
+
+    function spawn(o) {
+      if (count >= MAX) {
+        // Pool lleno: reemplaza la más vieja en vez de descartar el evento.
+        let worst = 0, worstT = -1;
+        for (let i = 0; i < 64; i++) {
+          const j = (Math.random() * count) | 0;
+          const t = 1 - life[j] / maxLife[j];
+          if (t > worstT) { worstT = t; worst = j; }
+        }
+        count = Math.max(count, worst + 1);
+        write(worst, o);
+        return;
+      }
+      write(count++, o);
+    }
+
+    function write(i, o) {
+      px[i] = o.x; py[i] = o.y; pz[i] = o.z;
+      vx[i] = o.vx || 0; vy[i] = o.vy || 0; vz[i] = o.vz || 0;
+      maxLife[i] = o.life || 1; life[i] = maxLife[i];
+      size0[i] = o.size || 0.3; size1[i] = o.sizeEnd === undefined ? size0[i] * 2.2 : o.sizeEnd;
+      const c = o.color || [0.55, 0.42, 0.28];
+      cr[i] = c[0]; cg[i] = c[1]; cb[i] = c[2];
+      alpha0[i] = o.alpha === undefined ? 0.55 : o.alpha;
+      glow[i] = o.glow || 0;
+      rot[i] = Math.random() * Math.PI * 2;
+      rotV[i] = (Math.random() - 0.5) * (o.spin === undefined ? 1.2 : o.spin);
+      drag[i] = o.drag === undefined ? 1.6 : o.drag;
+      grav[i] = o.gravity === undefined ? -1.2 : o.gravity;
+    }
+
+    function update(dt, wind) {
+      const wx = wind ? wind[0] : 0, wz = wind ? wind[2] : 0;
+      let n = 0;
+      for (let i = 0; i < count; i++) {
+        life[i] -= dt;
+        if (life[i] <= 0) continue;
+        // Compacta en el lugar: los vivos quedan al frente del arreglo.
+        if (n !== i) {
+          px[n] = px[i]; py[n] = py[i]; pz[n] = pz[i];
+          vx[n] = vx[i]; vy[n] = vy[i]; vz[n] = vz[i];
+          life[n] = life[i]; maxLife[n] = maxLife[i];
+          size0[n] = size0[i]; size1[n] = size1[i];
+          cr[n] = cr[i]; cg[n] = cg[i]; cb[n] = cb[i];
+          alpha0[n] = alpha0[i]; glow[n] = glow[i];
+          rot[n] = rot[i]; rotV[n] = rotV[i];
+          drag[n] = drag[i]; grav[n] = grav[i];
+        }
+        const d = Math.max(0, 1 - drag[n] * dt);
+        vx[n] = vx[n] * d + wx * dt * 0.8;
+        vz[n] = vz[n] * d + wz * dt * 0.8;
+        vy[n] = vy[n] * d + grav[n] * dt;
+        px[n] += vx[n] * dt; py[n] += vy[n] * dt; pz[n] += vz[n] * dt;
+        rot[n] += rotV[n] * dt;
+        n++;
+      }
+      count = n;
+    }
+
+    function upload() {
+      for (let i = 0; i < count; i++) {
+        const t = 1 - life[i] / maxLife[i];
+        const o = i * 12;
+        data[o] = px[i]; data[o + 1] = py[i]; data[o + 2] = pz[i];
+        data[o + 3] = size0[i] + (size1[i] - size0[i]) * t;
+        data[o + 4] = cr[i]; data[o + 5] = cg[i]; data[o + 6] = cb[i];
+        // Entrada rápida, salida larga: así el polvo "aparece" y se disipa.
+        const fade = Math.min(t / 0.12, 1.0) * (1 - t) * (1 - t);
+        data[o + 7] = alpha0[i] * fade;
+        data[o + 8] = rot[i];
+        data[o + 9] = glow[i] * (1 - t);
+        data[o + 10] = 0; data[o + 11] = 0;
+      }
+      if (count === 0) return;
+      gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * 12));
+    }
+
+    function draw(ctx) {
+      if (count === 0) return;
+      upload();
+      gl.useProgram(prog.prog);
+      const U = EV.GL.U;
+      U.m4(prog, 'uViewProj', ctx.viewProj);
+      U.v3(prog, 'uCamRight', ctx.camRight);
+      U.v3(prog, 'uCamUp', ctx.camUp);
+      U.tex(prog, 'uSceneDepth', 0, ctx.depthTex);
+      U.v2(prog, 'uScreenSize', ctx.width, ctx.height);
+      U.f(prog, 'uNear', ctx.near);
+      U.f(prog, 'uFar', ctx.far);
+      U.v3(prog, 'uSunDir', ctx.sunDir);
+      U.v3(prog, 'uSunRadiance', ctx.sunRadiance);
+
+      gl.enable(gl.BLEND);
+      // Premultiplicado: el shader ya multiplicó color por alfa.
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LESS);
+      gl.disable(gl.CULL_FACE);
+
+      gl.bindVertexArray(vao);
+      gl.drawElementsInstanced(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0, count);
+      gl.bindVertexArray(null);
+
+      gl.disable(gl.BLEND);
+      gl.enable(gl.CULL_FACE);
+    }
+
+    // ------------------------------------------------------- emisores
+    const E = {
+      footstep(x, y, z, speed) {
+        const n = 2 + (speed > 8 ? 2 : 0);
+        for (let i = 0; i < n; i++) {
+          spawn({
+            x: x + (Math.random() - 0.5) * 0.3, y: y + 0.05, z: z + (Math.random() - 0.5) * 0.3,
+            vx: (Math.random() - 0.5) * 0.9, vy: 0.35 + Math.random() * 0.5,
+            vz: (Math.random() - 0.5) * 0.9,
+            life: 0.7 + Math.random() * 0.6, size: 0.14, sizeEnd: 0.62,
+            color: [0.62, 0.45, 0.28], alpha: 0.28, drag: 2.2, gravity: -0.5,
+          });
+        }
+      },
+      landing(x, y, z, force) {
+        const n = 8 + Math.min(18, force | 0);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const sp = 1.4 + Math.random() * 3.0 * (force / 12);
+          spawn({
+            x, y: y + 0.06, z,
+            vx: Math.cos(a) * sp, vy: 0.5 + Math.random() * 1.1, vz: Math.sin(a) * sp,
+            life: 0.9 + Math.random() * 0.8, size: 0.18, sizeEnd: 1.3,
+            color: [0.60, 0.44, 0.27], alpha: 0.34, drag: 1.9, gravity: -1.0,
+          });
+        }
+      },
+      thruster(x, y, z, dx, dz) {
+        spawn({
+          x, y, z,
+          vx: -dx * 1.2 + (Math.random() - 0.5) * 0.5, vy: -1.6 - Math.random(),
+          vz: -dz * 1.2 + (Math.random() - 0.5) * 0.5,
+          life: 0.45, size: 0.10, sizeEnd: 0.45,
+          color: [1.0, 0.62, 0.28], alpha: 0.5, glow: 2.4, drag: 3.2, gravity: 0.8,
+        });
+      },
+      muzzle(x, y, z, dx, dy, dz) {
+        spawn({
+          x, y, z, vx: dx * 3, vy: dy * 3, vz: dz * 3,
+          life: 0.075, size: 0.30, sizeEnd: 0.16,
+          color: [1.0, 0.78, 0.42], alpha: 0.9, glow: 9.0, drag: 6, gravity: 0,
+        });
+        for (let i = 0; i < 4; i++) {
+          spawn({
+            x, y, z,
+            vx: dx * 9 + (Math.random() - 0.5) * 4,
+            vy: dy * 9 + (Math.random() - 0.5) * 4,
+            vz: dz * 9 + (Math.random() - 0.5) * 4,
+            life: 0.16 + Math.random() * 0.15, size: 0.035, sizeEnd: 0.012,
+            color: [1.0, 0.66, 0.28], alpha: 0.95, glow: 6.0, drag: 2.4, gravity: -5,
+          });
+        }
+      },
+      impact(x, y, z, nx, ny, nz, heavy) {
+        const n = heavy ? 16 : 7;
+        for (let i = 0; i < n; i++) {
+          spawn({
+            x, y, z,
+            vx: nx * 3 + (Math.random() - 0.5) * 7,
+            vy: ny * 3 + Math.random() * 5,
+            vz: nz * 3 + (Math.random() - 0.5) * 7,
+            life: 0.28 + Math.random() * 0.45, size: 0.045, sizeEnd: 0.015,
+            color: [1.0, 0.72, 0.34], alpha: 0.95, glow: 5.0, drag: 1.4, gravity: -9,
+          });
+        }
+        for (let i = 0; i < (heavy ? 10 : 4); i++) {
+          spawn({
+            x, y, z,
+            vx: nx * 1.5 + (Math.random() - 0.5) * 2.4,
+            vy: ny * 1.5 + Math.random() * 1.6,
+            vz: nz * 1.5 + (Math.random() - 0.5) * 2.4,
+            life: 0.7 + Math.random() * 0.8, size: 0.12, sizeEnd: 0.75,
+            color: [0.34, 0.30, 0.27], alpha: 0.42, drag: 2.0, gravity: -0.6,
+          });
+        }
+      },
+      titanStep(x, y, z, intensity) {
+        const n = 14 + (intensity * 22) | 0;
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const sp = 2.5 + Math.random() * 7 * intensity;
+          spawn({
+            x: x + Math.cos(a) * 2.2, y: y + 0.2, z: z + Math.sin(a) * 2.2,
+            vx: Math.cos(a) * sp, vy: 0.8 + Math.random() * 2.4, vz: Math.sin(a) * sp,
+            life: 1.8 + Math.random() * 2.0, size: 0.6, sizeEnd: 5.5,
+            color: [0.58, 0.42, 0.26], alpha: 0.30, drag: 1.1, gravity: -0.5,
+          });
+        }
+      },
+      ember(x, y, z) {
+        spawn({
+          x: x + (Math.random() - 0.5) * 0.4, y, z: z + (Math.random() - 0.5) * 0.4,
+          vx: (Math.random() - 0.5) * 0.4, vy: 1.1 + Math.random() * 1.4,
+          vz: (Math.random() - 0.5) * 0.4,
+          life: 1.4 + Math.random() * 1.4, size: 0.035, sizeEnd: 0.012,
+          color: [1.0, 0.52, 0.16], alpha: 0.95, glow: 4.5, drag: 0.8, gravity: 0.55,
+        });
+      },
+      // Polvo ambiental arrastrado por el viento: es lo que llena el aire
+      // durante la tormenta y da profundidad al espacio vacío.
+      ambientDust(cx, cy, cz, storm) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 6 + Math.random() * 34;
+        spawn({
+          x: cx + Math.cos(a) * r, y: cy - 1 + Math.random() * 9, z: cz + Math.sin(a) * r,
+          vx: 4 + storm * 22 + Math.random() * 3, vy: (Math.random() - 0.4) * 0.6,
+          vz: 1.5 + storm * 8 + Math.random() * 2,
+          life: 1.6 + Math.random() * 1.8,
+          size: 0.10 + Math.random() * 0.5 + storm * 0.9,
+          sizeEnd: 0.6 + storm * 2.6,
+          color: [0.66, 0.50, 0.32], alpha: 0.05 + storm * 0.16,
+          drag: 0.25, gravity: -0.15, spin: 0.5,
+        });
+      },
+      absorb(x, y, z) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 3 + Math.random() * 7;
+        spawn({
+          x: x + Math.cos(a) * r, y: y + (Math.random() - 0.5) * 6, z: z + Math.sin(a) * r,
+          vx: -Math.cos(a) * 5, vy: 0.5, vz: -Math.sin(a) * 5,
+          life: 1.1, size: 0.12, sizeEnd: 0.03,
+          color: [1.0, 0.72, 0.30], alpha: 0.9, glow: 5.5, drag: 0.3, gravity: 0.4,
+        });
+      },
+    };
+
+    return {
+      spawn, update, draw, emit: E,
+      get count() { return count; },
+      get capacity() { return MAX; },
+    };
+  }
+
+  EV.Particles = { create, MAX };
+})(window.EV = window.EV || {});
+
 /* ===== 60-shaders-geo.js ===== */
 // Ecos del Vacío — shaders de los pases de geometría.
-// Un solo vertex shader cubre terreno, nodos y props instanciados vía defines,
-// para que los tres pases (sombra, prepase, principal) compartan exactamente la
-// misma transformación — requisito de la prueba de profundidad LEQUAL.
+// Un solo vertex shader cubre terreno, nodos, props instanciados y personajes
+// con piel, vía defines, para que los tres pases (sombra, prepase, principal)
+// compartan exactamente la misma transformación — requisito de la prueba de
+// profundidad LEQUAL del pase opaco.
 (function (EV) {
   'use strict';
 
@@ -1839,11 +3615,17 @@ layout(location=2) in float aExtra;
 layout(location=3) in vec4 aInst0;   // pos.xyz, escalaY
 layout(location=4) in vec4 aInst1;   // sinRot, cosRot, escalaXZ, variación
 #endif
+#ifdef SKINNED
+layout(location=5) in vec4 aBoneIdx;
+layout(location=6) in vec4 aBoneWgt;
+uniform highp sampler2D uBoneTex;
+uniform highp sampler2D uPrevBoneTex;
+#endif
 
 uniform mat4 uViewProj;          // con jitter de TAA
 uniform mat4 uViewProjNoJit;
 uniform mat4 uPrevViewProjNoJit;
-#ifdef NODE
+#if defined(NODE)
 uniform mat4 uModel;
 uniform mat4 uPrevModel;
 uniform mat4 uNormalMat;
@@ -1858,12 +3640,40 @@ out vec4  vPrevClipNoJit;
 
 invariant gl_Position;
 
+#ifdef SKINNED
+// Cuatro téxeles consecutivos por hueso forman su mat4. Con uniformes se choca
+// contra MAX_VERTEX_UNIFORM_VECTORS en cuanto hay más de ~50 huesos.
+mat4 boneMatrix(highp sampler2D tex, float idx){
+  int b = int(idx) * 4;
+  return mat4(
+    texelFetch(tex, ivec2(b + 0, 0), 0),
+    texelFetch(tex, ivec2(b + 1, 0), 0),
+    texelFetch(tex, ivec2(b + 2, 0), 0),
+    texelFetch(tex, ivec2(b + 3, 0), 0));
+}
+mat4 skinMatrix(highp sampler2D tex){
+  return boneMatrix(tex, aBoneIdx.x) * aBoneWgt.x
+       + boneMatrix(tex, aBoneIdx.y) * aBoneWgt.y
+       + boneMatrix(tex, aBoneIdx.z) * aBoneWgt.z
+       + boneMatrix(tex, aBoneIdx.w) * aBoneWgt.w;
+}
+#endif
+
 void main(){
   vec3 world;
   vec3 nrm;
+  vec3 prevWorld;
   float variation = 0.0;
 
-#if defined(INSTANCED)
+#if defined(SKINNED)
+  mat4 skin = skinMatrix(uBoneTex);
+  world = (skin * vec4(aPos, 1.0)).xyz;
+  // La inversa-transpuesta exacta es cara por vértice; con huesos rígidos y
+  // escala uniforme la submatriz 3x3 basta y el error es imperceptible.
+  nrm = normalize(mat3(skin) * aNormal);
+  prevWorld = (skinMatrix(uPrevBoneTex) * vec4(aPos, 1.0)).xyz;
+
+#elif defined(INSTANCED)
   float s = aInst1.x, c = aInst1.y;
   vec3 scaled = vec3(aPos.x * aInst1.z, aPos.y * aInst0.w, aPos.z * aInst1.z);
   world = vec3(
@@ -1877,15 +3687,17 @@ void main(){
    -aNormal.x * s + aNormal.z * c
   ));
   variation = aInst1.w;
-  vec3 prevWorld = world;   // los props son estáticos
+  prevWorld = world;   // los props son estáticos
+
 #elif defined(NODE)
   world = (uModel * vec4(aPos, 1.0)).xyz;
   nrm = normalize((uNormalMat * vec4(aNormal, 0.0)).xyz);
-  vec3 prevWorld = (uPrevModel * vec4(aPos, 1.0)).xyz;
+  prevWorld = (uPrevModel * vec4(aPos, 1.0)).xyz;
+
 #else   // TERRAIN
   world = aPos;
   nrm = aNormal;
-  vec3 prevWorld = world;
+  prevWorld = world;
 #endif
 
   vWorld = world;
@@ -1905,17 +3717,22 @@ in vec4 vClipNoJit; in vec4 vPrevClipNoJit;
 void main(){}`;
 
   // ------------------------------------------------------------- materiales
-  // Compartido entre prepase y pase principal para que normal y rugosidad
-  // coincidan exactamente en ambos.
   const MATERIAL_CHUNK = /* glsl */`
 uniform float uTime;
 uniform vec3  uCamPos;
-#ifdef NODE
+#if defined(NODE)
 uniform vec3  uAlbedo;
 uniform float uRough;
 uniform float uMetal;
 uniform vec3  uEmissive;
-uniform float uDamage;     // 0..1 oscurece y quema la superficie del titán
+uniform float uDamage;
+#endif
+#if defined(SKINNED)
+uniform vec3  uSuitColor;
+uniform vec3  uArmorColor;
+uniform vec3  uAccentColor;
+uniform float uWear;       // suciedad acumulada del planeta
+uniform float uEmissivePulse;
 #endif
 #ifdef INSTANCED
 uniform int uPropType;     // 0 = cristal, 1 = chatarra
@@ -1942,7 +3759,6 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
   vec3 N = normalize(nrm);
 
 #if defined(TERRAIN)
-  // Arena de sílice: ámbar cálido, con ondulación de viento y vetas de cristal.
   float slope = 1.0 - saturate(N.y);
   vec3 sand   = vec3(0.402, 0.246, 0.116);
   vec3 sandLo = vec3(0.282, 0.166, 0.086);
@@ -1954,7 +3770,6 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
   albedo = mix(albedo, rock, smoothstep(0.22, 0.55, slope));
   albedo = mix(albedo, glass, saturate(extra) * 0.75);
 
-  // Ondas de viento sólo en pendiente suave, alineadas a una dirección dominante.
   float ripple = sin(dot(wp.xz, vec2(0.83, 0.56)) * 1.85
                      + fbm3(wp * 0.06, 2) * 9.0) * 0.5 + 0.5;
   float rippleMask = (1.0 - smoothstep(0.05, 0.3, slope)) * (1.0 - saturate(extra));
@@ -1969,21 +3784,76 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
   m.metal  = 0.0;
   m.N = N;
 
+#elif defined(SKINNED)
+  // El atributo extra es el submaterial escrito por el generador de malla:
+  // 0 traje · 1 blindaje · 2 visor · 3 acento · 4 goma/junta
+  int sub = int(extra + 0.5);
+  vec3 albedo; float rough; float metal;
+
+  if(sub == 1){                       // placa de blindaje
+    albedo = uArmorColor;
+    rough = 0.34; metal = 0.88;
+  } else if(sub == 2){                // visor
+    albedo = vec3(0.020, 0.026, 0.034);
+    rough = 0.045; metal = 0.0;
+    // El visor refleja el interior iluminado del casco, no sólo el entorno.
+    m.emissive = vec3(0.06, 0.20, 0.32) * (0.7 + 0.3 * uEmissivePulse);
+  } else if(sub == 3){                // acento (luces, franjas de identidad)
+    albedo = uAccentColor * 0.16;
+    rough = 0.28; metal = 0.15;
+    m.emissive = uAccentColor * (1.3 + 0.7 * uEmissivePulse);
+  } else if(sub == 4){                // goma, juntas, botas
+    albedo = uSuitColor * 0.62;
+    rough = 0.86; metal = 0.03;
+  } else {                            // tejido del traje
+    albedo = uSuitColor;
+    rough = 0.72; metal = 0.06;
+  }
+
+  if(sub != 2 && sub != 3){
+    // Microdetalle: tejido fino en el traje, rayado en el metal.
+    float fine = fbm3(wp * (sub == 1 ? 9.0 : 16.0), 2);
+    albedo *= 0.93 + 0.14 * fine;
+    rough = saturate(rough + (fine - 0.5) * (sub == 1 ? 0.12 : 0.08));
+    N = perturbNormal(N, wp, sub == 1 ? 7.0 : 12.0, 0.07);
+
+    // Polvo de Kether: se acumula arriba, no en las caras que miran al suelo.
+    float dustMask = saturate(N.y) * uWear;
+    float dustNoise = fbm3(wp * 2.6, 2);
+    albedo = mix(albedo, vec3(0.330, 0.215, 0.112), dustMask * (0.35 + 0.45 * dustNoise));
+    rough = mix(rough, 0.94, dustMask * 0.7);
+    metal *= 1.0 - dustMask * 0.75;
+  }
+
+  m.albedo = albedo;
+  m.rough = rough;
+  m.metal = metal;
+  m.N = N;
+
 #elif defined(INSTANCED)
   if(uPropType == 0){
-    // Cristal: baja rugosidad, gradiente interno por altura, tinte por instancia.
     vec3 tint = mix(vec3(0.86, 0.74, 0.58), vec3(0.66, 0.72, 0.86), variation);
     m.albedo = mix(tint * 0.62, tint, extra);
     m.rough  = mix(0.05, 0.18, variation) + extra * 0.05;
     m.metal  = 0.0;
-    // Transmisión aproximada: el cristal deja pasar luz, así que el borde y la
-    // punta se encienden aunque no estén orientados al sol.
     float rim = pow(1.0 - saturate(abs(dot(N, normalize(uCamPos - wp)))), 3.0);
     m.emissive = tint * (0.10 + 0.55 * extra) * (0.25 + rim * 1.6);
     m.emissive += vec3(0.55, 0.38, 0.22) * pow(1.0 - extra, 3.0) * 0.20 * variation;
     m.N = N;
+  } else if(uPropType == 2){
+    // Roca de sílice: mate, con vetas claras y polvo acumulado arriba.
+    float grain = fbm3(wp * 1.7, 3);
+    float veins = fbm3(wp * 0.42 + 11.0, 2);
+    vec3 dark = vec3(0.118, 0.098, 0.082);
+    vec3 pale = vec3(0.268, 0.226, 0.180);
+    m.albedo = mix(dark, pale, grain * 0.7 + veins * 0.45);
+    // La arena se posa en las caras que miran arriba.
+    float settle = saturate(N.y) * 0.8;
+    m.albedo = mix(m.albedo, vec3(0.360, 0.235, 0.128), settle * (0.30 + 0.35 * grain));
+    m.rough = mix(0.72, 0.95, grain);
+    m.metal = 0.0;
+    m.N = perturbNormal(N, wp, 2.6, 0.32);
   } else {
-    // Chatarra humana: metal pintado, oxidado y comido por la arena.
     float rust = fbm3(wp * 0.9, 3);
     vec3 painted = mix(vec3(0.30, 0.31, 0.33), vec3(0.42, 0.20, 0.10), smoothstep(0.45, 0.75, rust));
     m.albedo = mix(painted, vec3(0.26, 0.18, 0.12), variation * 0.5);
@@ -1997,12 +3867,10 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
   float rough = uRough;
   float metal = uMetal;
 
-  // Detalle de superficie: paneles y microrrayado según el tipo de material.
   float panel = fbm3(wp * 1.7, 3);
   albedo *= 0.86 + 0.28 * panel;
   rough = saturate(rough + (panel - 0.5) * 0.18);
 
-  // Daño acumulado: la placa se ennegrece y pierde brillo donde fue golpeada.
   float burn = saturate(uDamage);
   albedo = mix(albedo, albedo * vec3(0.18, 0.14, 0.12), burn);
   rough = mix(rough, 0.95, burn * 0.8);
@@ -2021,7 +3889,6 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
   // ----------------------------------------------------------------- prepase
   const PREPASS_FS = /* glsl */`
 #include <common>
-${''}
 in vec3  vWorld;
 in vec3  vNormal;
 in float vExtra;
@@ -2041,7 +3908,7 @@ void main(){
 
   vec2 curr = vClipNoJit.xy / max(vClipNoJit.w, 1e-6);
   vec2 prev = vPrevClipNoJit.xy / max(vPrevClipNoJit.w, 1e-6);
-  oVelocity = (curr - prev) * 0.5;   // en UV
+  oVelocity = (curr - prev) * 0.5;
 }`;
 
   // ------------------------------------------------------------------ opaco
@@ -2050,6 +3917,7 @@ void main(){
 #include <pbr>
 #include <shadow>
 #include <atmosphere>
+#include <lights>
 
 in vec3  vWorld;
 in vec3  vNormal;
@@ -2061,15 +3929,47 @@ in vec4  vPrevClipNoJit;
 uniform samplerCube uSkyCube;
 uniform samplerCube uIrradiance;
 uniform sampler2D   uAO;
+uniform sampler2D   uDepthHalf;
+uniform mat4        uViewProjNoJitFS;
+uniform mat4        uInvViewProjFS;
 uniform float       uSkyMips;
 uniform vec2        uScreenSize;
 uniform vec3        uSunRadiance;
 uniform float       uFogDensity;
 uniform float       uExposureComp;
+uniform float       uContactShadow;
 
 layout(location=0) out vec4 oColor;
 
 #include <material>
+
+// Sombra de contacto: marcha corta contra el búfer de profundidad. Las cascadas
+// no resuelven el contacto pie-suelo ni el hueco bajo una placa; esto sí, y es
+// lo que evita que los personajes parezcan flotar.
+float contactShadow(vec3 wp, vec3 L, float ditherSeed){
+  if(uContactShadow < 0.5) return 1.0;
+  const int STEPS = 8;
+  float rayLen = 0.45;
+  float stepLen = rayLen / float(STEPS);
+  float jitter = hash12(gl_FragCoord.xy + ditherSeed);
+  float occ = 0.0;
+  for(int i = 1; i <= STEPS; i++){
+    vec3 p = wp + L * (stepLen * (float(i) + jitter));
+    vec4 clip = uViewProjNoJitFS * vec4(p, 1.0);
+    if(clip.w <= 0.0) break;
+    vec3 ndc = clip.xyz / clip.w;
+    if(abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0) break;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    float sceneDepth = texture(uDepthHalf, uv).r;
+    float rayDepth = ndc.z * 0.5 + 0.5;
+    float diff = rayDepth - sceneDepth;
+    // Ventana de espesor: sin ella, cualquier objeto lejano proyecta sombra.
+    if(diff > 1e-6 && diff < 0.0016){
+      occ = max(occ, 1.0 - float(i) / float(STEPS));
+    }
+  }
+  return 1.0 - occ * 0.85;
+}
 
 void main(){
   MatOut m = evalMaterial(vWorld, vNormal, vExtra, vVariation);
@@ -2081,18 +3981,19 @@ void main(){
   Surface s;
   s.albedo = m.albedo; s.N = N; s.V = V;
   s.rough = m.rough; s.metal = m.metal; s.emissive = m.emissive;
-  // El AO vive a media resolución: se muestrea por UV, no por téxel.
   s.ao = texture(uAO, gl_FragCoord.xy / uScreenSize).r;
 
-  // --- sol directo con sombra en cascada
-  float viewDepth = dist;
-  float shadow = sampleShadow(vWorld, N, uSunDir, viewDepth);
+  // --- sol directo con sombra en cascada + contacto
+  float shadow = sampleShadow(vWorld, N, uSunDir, dist);
+  if(shadow > 0.01) shadow *= contactShadow(vWorld, uSunDir, uTime * 13.0);
   vec3 color = directLight(s, uSunDir, uSunRadiance * shadow);
 
-  // --- ambiente: irradiancia difusa + especular prefiltrado del cielo
+  // --- luces locales (fogonazo, fogata, núcleo del titán, baliza)
+  color += evalPointLights(s, vWorld);
+
+  // --- ambiente
   float NoV = saturate(dot(N, V));
   vec3 f0 = mix(vec3(0.04), s.albedo, s.metal);
-
   vec3 irr = texture(uIrradiance, N).rgb;
   vec3 diffuseIBL = irr * s.albedo * (1.0 - s.metal);
 
@@ -2101,17 +4002,13 @@ void main(){
   vec3 pre = textureLod(uSkyCube, R, lod).rgb;
   vec3 specIBL = pre * envBRDFApprox(f0, s.rough, NoV);
 
-  // Oclusión especular derivada del AO (Lagarde): evita reflejos flotando en
-  // cavidades que el AO ya oscureció.
   float specAO = saturate(pow(NoV + s.ao, exp2(-16.0 * s.rough - 1.0)) - 1.0 + s.ao);
-
   color += diffuseIBL * s.ao + specIBL * specAO;
   color += s.emissive;
 
-  // --- perspectiva aérea: extinción + luz dispersa en el camino
+  // --- perspectiva aérea
   vec3 inscatter = textureLod(uSkyCube, -V, uSkyMips * 0.55).rgb;
-  float sigma = uFogDensity;
-  float ext = exp(-dist * sigma);
+  float ext = exp(-dist * uFogDensity);
   color = color * ext + inscatter * (1.0 - ext);
 
   oColor = vec4(color * uExposureComp, 1.0);
@@ -2141,7 +4038,6 @@ void main(){
   vec3 rd = normalize(vDir);
   vec3 col = texture(uSkyCube, rd).rgb;
   col += sunDisc(rd);
-  // Ruido de orden bajo para romper el banding del degradado en 16 bits.
   col += (hash12(gl_FragCoord.xy) - 0.5) * 0.0015;
   oColor = vec4(col * uExposureComp, 1.0);
 }`;
@@ -2149,9 +4045,39 @@ void main(){
   EV.GeoShaders = {
     GEO_VS, SHADOW_FS, PREPASS_FS, MAIN_FS, SKYBOX_VS, SKYBOX_FS, MATERIAL_CHUNK,
   };
-
-  // Registra el chunk de materiales para que #include <material> lo resuelva.
   EV.Shaders.chunks['material'] = MATERIAL_CHUNK;
+
+  // ------------------------------------------------------------------- luces
+  // Lista corta de luces puntuales evaluadas hacia adelante. Con MAX_LIGHTS
+  // chico el coste es despreciable y el impacto visual enorme: fogonazo, fuego
+  // del campamento, núcleo del titán.
+  EV.Shaders.chunks['lights'] = /* glsl */`
+#ifndef MAX_LIGHTS
+#define MAX_LIGHTS 8
+#endif
+uniform int  uLightCount;
+uniform vec4 uLightPos[MAX_LIGHTS];     // xyz posición, w radio
+uniform vec4 uLightColor[MAX_LIGHTS];   // rgb color, a intensidad
+
+vec3 evalPointLights(Surface s, vec3 wp){
+  vec3 sum = vec3(0.0);
+  for(int i = 0; i < MAX_LIGHTS; i++){
+    if(i >= uLightCount) break;
+    vec3 d = uLightPos[i].xyz - wp;
+    float dist2 = dot(d, d);
+    float radius = uLightPos[i].w;
+    if(dist2 > radius * radius) continue;
+    float dist = sqrt(max(dist2, 1e-6));
+    vec3 L = d / dist;
+    // Caída inversa al cuadrado con ventana suave al radio: física donde
+    // importa, corte limpio donde deja de aportar.
+    float win = saturate(1.0 - pow(dist / radius, 4.0));
+    float atten = win * win / max(dist2, 0.04);
+    sum += directLight(s, L, uLightColor[i].rgb * uLightColor[i].a * atten);
+  }
+  return sum;
+}
+`;
 })(window.EV = window.EV || {});
 
 /* ===== 62-shaders-post.js ===== */
@@ -2612,12 +4538,13 @@ void main(){
 
   // Presets de calidad. Todo lo que cuesta milisegundos es un define de shader,
   // así que bajar calidad recompila más barato en vez de ramificar en runtime.
+  const MAX_LIGHTS = 8;
   const PRESETS = {
-    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2 },
-    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2 },
-    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2 },
-    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4 },
-    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4 },
+    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2, contact: 1 },
+    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2, contact: 1 },
+    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2, contact: 1 },
+    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4, contact: 0 },
+    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4, contact: 0 },
   };
 
   // Secuencia de Halton para el jitter subpíxel del TAA.
@@ -2659,6 +4586,7 @@ void main(){
       SHADOW_TAPS: Q.shadowTaps,
       SSAO_SAMPLES: Q.ssaoSamples,
       VOL_STEPS: Q.volSteps,
+      MAX_LIGHTS: MAX_LIGHTS,
     };
     const mk = (vs, fs, label, def) => G.program(vs, fs, label, Object.assign({}, COST, def || {}));
     const prog = {
@@ -2673,6 +4601,10 @@ void main(){
       mainTerrain: mk(GS.GEO_VS, GS.MAIN_FS, 'main.terrain', { TERRAIN: 1 }),
       mainInst: mk(GS.GEO_VS, GS.MAIN_FS, 'main.inst', { INSTANCED: 1 }),
       mainNode: mk(GS.GEO_VS, GS.MAIN_FS, 'main.node', { NODE: 1 }),
+
+      shadowSkinned: mk(GS.GEO_VS, GS.SHADOW_FS, 'shadow.skinned', { SKINNED: 1 }),
+      prepassSkinned: mk(GS.GEO_VS, GS.PREPASS_FS, 'prepass.skinned', { SKINNED: 1 }),
+      mainSkinned: mk(GS.GEO_VS, GS.MAIN_FS, 'main.skinned', { SKINNED: 1 }),
 
       skybox: mk(GS.SKYBOX_VS, GS.SKYBOX_FS, 'skybox'),
       ssao: mk(PS.FS_VS, PS.SSAO_FS, 'ssao'),
@@ -2777,7 +4709,29 @@ void main(){
     const _center = EV.V3.create();
     const _eye = EV.V3.create();
     const UP = EV.V3.create(0, 1, 0);
+    const camRight = EV.V3.create(1, 0, 0);
+    const camUp = EV.V3.create(0, 1, 0);
     const ALT_UP = EV.V3.create(0, 0, 1);
+
+    // Luces puntuales empaquetadas para subir de una sola vez.
+    const lightPos = new Float32Array(MAX_LIGHTS * 4);
+    const lightColor = new Float32Array(MAX_LIGHTS * 4);
+    let lightCount = 0;
+
+    function packLights(lights) {
+      lightCount = 0;
+      if (!lights) return;
+      for (const l of lights) {
+        if (lightCount >= MAX_LIGHTS) break;
+        if (!l || l.intensity <= 0) continue;
+        const o = lightCount * 4;
+        lightPos[o] = l.pos[0]; lightPos[o + 1] = l.pos[1]; lightPos[o + 2] = l.pos[2];
+        lightPos[o + 3] = l.radius;
+        lightColor[o] = l.color[0]; lightColor[o + 1] = l.color[1]; lightColor[o + 2] = l.color[2];
+        lightColor[o + 3] = l.intensity;
+        lightCount++;
+      }
+    }
 
     let frame = 0;
     let historyIndex = 0;
@@ -2853,6 +4807,26 @@ void main(){
       }
     }
 
+    // Cada personaje es una llamada de dibujo: su textura de huesos y su
+    // paleta son lo único que cambia entre uno y otro.
+    function drawCharacters(P, characters, withMaterial) {
+      if (!characters) return;
+      for (const c of characters) {
+        if (!c.visible) continue;
+        U.tex(P, 'uBoneTex', 6, c.skin.boneTex);
+        U.tex(P, 'uPrevBoneTex', 7, c.skin.prevBoneTex);
+        if (withMaterial) {
+          const pal = c.palette;
+          U.v3f(P, 'uSuitColor', pal.suit[0], pal.suit[1], pal.suit[2]);
+          U.v3f(P, 'uArmorColor', pal.armor[0], pal.armor[1], pal.armor[2]);
+          U.v3f(P, 'uAccentColor', pal.accent[0], pal.accent[1], pal.accent[2]);
+          U.f(P, 'uWear', c.wear === undefined ? 0.45 : c.wear);
+          U.f(P, 'uEmissivePulse', c.pulse === undefined ? 1 : c.pulse);
+        }
+        c.mesh.draw();
+      }
+    }
+
     function setGeoCommon(P, scene) {
       U.m4(P, 'uViewProj', viewProj);
       U.m4(P, 'uViewProjNoJit', viewProjNoJit);
@@ -2884,6 +4858,11 @@ void main(){
       EV.M4.invert(invProj, projNoJit);
       if (needsHistoryReset) EV.M4.copy(prevViewProjNoJit, viewProjNoJit);
 
+      // Ejes de pantalla, para orientar los billboards de partículas.
+      camRight[0] = view[0]; camRight[1] = view[4]; camRight[2] = view[8];
+      camUp[0] = view[1]; camUp[1] = view[5]; camUp[2] = view[9];
+
+      packLights(scene.lights);
       sky.update(cam.pos[1]);
       fitCascades(cam, sky.sunDir);
 
@@ -2918,6 +4897,8 @@ void main(){
         scene.props.draw();
         setShadow(prog.shadowNode);
         drawNodes(prog.shadowNode, scene.nodes, false);
+        setShadow(prog.shadowSkinned);
+        drawCharacters(prog.shadowSkinned, scene.characters, false);
       }
       gl.cullFace(gl.BACK);
 
@@ -2940,10 +4921,16 @@ void main(){
       scene.props.draw('crystal');
       U.i(prog.prepassInst, 'uPropType', 1);
       scene.props.draw('debris');
+      U.i(prog.prepassInst, 'uPropType', 2);
+      scene.props.draw('rock');
 
       gl.useProgram(prog.prepassNode.prog);
       setGeoCommon(prog.prepassNode, scene);
       drawNodes(prog.prepassNode, scene.nodes, true);
+
+      gl.useProgram(prog.prepassSkinned.prog);
+      setGeoCommon(prog.prepassSkinned, scene);
+      drawCharacters(prog.prepassSkinned, scene.characters, true);
 
       // ------------------------------------------------------------- 3. SSAO
       gl.disable(gl.DEPTH_TEST);
@@ -3017,6 +5004,15 @@ void main(){
         U.v3(P, 'uSunRadiance', sky.sunRadiance);
         U.f(P, 'uFogDensity', scene.fogDensity);
         U.f(P, 'uExposureComp', 1.0);
+        // Sombra de contacto: marcha contra la profundidad de media resolución
+        // (no contra la textura adjunta al FBO, que sería realimentación).
+        U.tex(P, 'uDepthHalf', 4, fb.depthHalf.tex);
+        U.m4(P, 'uViewProjNoJitFS', viewProjNoJit);
+        U.m4(P, 'uInvViewProjFS', invViewProj);
+        U.f(P, 'uContactShadow', Q.contact ? 1.0 : 0.0);
+        U.i(P, 'uLightCount', lightCount);
+        if (P.u.uLightPos) gl.uniform4fv(P.u.uLightPos, lightPos);
+        if (P.u.uLightColor) gl.uniform4fv(P.u.uLightColor, lightColor);
       };
 
       gl.useProgram(prog.mainTerrain.prog);
@@ -3030,10 +5026,30 @@ void main(){
       scene.props.draw('crystal');
       U.i(prog.mainInst, 'uPropType', 1);
       scene.props.draw('debris');
+      U.i(prog.mainInst, 'uPropType', 2);
+      scene.props.draw('rock');
 
       gl.useProgram(prog.mainNode.prog);
       bindLighting(prog.mainNode);
       drawNodes(prog.mainNode, scene.nodes, true);
+
+      gl.useProgram(prog.mainSkinned.prog);
+      bindLighting(prog.mainSkinned);
+      drawCharacters(prog.mainSkinned, scene.characters, true);
+
+      // Partículas dentro del búfer de escena: así la niebla volumétrica y la
+      // perspectiva aérea del pase siguiente también actúan sobre ellas.
+      if (scene.particles) {
+        scene.particles.draw({
+          viewProj, camRight, camUp,
+          depthTex: fb.depthHalf.tex,
+          width: W, height: H,
+          near: cam.near, far: cam.far,
+          sunDir: sky.sunDir, sunRadiance: sky.sunRadiance,
+        });
+        gl.depthFunc(gl.LEQUAL);
+        gl.depthMask(false);
+      }
 
       // ------------------------------------------------------ 5. volumétricos
       gl.disable(gl.DEPTH_TEST);
@@ -4538,9 +6554,9 @@ void main(){
 })(window.EV = window.EV || {});
 
 /* ===== 90-game.js ===== */
-// Ecos del Vacío — lógica de juego: misión, combate y estado del mundo.
-// La cadena de misión sigue la regla del documento de exploración: causalidad
-// antes que marcador. El valle no se marca hasta que la antena existe.
+// Ecos del Vacío — lógica de juego: misión, combate, personajes y estado del
+// mundo. La cadena de misión sigue la regla del documento de exploración:
+// causalidad antes que marcador.
 (function (EV) {
   'use strict';
 
@@ -4573,6 +6589,31 @@ void main(){
     },
   };
 
+  // Los supervivientes de la Meridiano. Cada uno tiene estilo, pose y una línea
+  // que dice al acercarse: es la entrega narrativa diegética del documento.
+  const SURVIVORS = [
+    {
+      name: 'Vela', style: 'technician', clip: 'work',
+      offset: [-7.5, 0, 3.0], yaw: 2.1,
+      line: 'Vela: —Si la antena engancha, recupero telemetría de proa. Andá, yo sigo acá.',
+    },
+    {
+      name: 'Ordoñez', style: 'soldier', clip: 'guard',
+      offset: [6.2, 0, -4.5], yaw: -0.6,
+      line: 'Ordoñez: —Algo camina al sur. No lo vi. Lo sentí en el suelo.',
+    },
+    {
+      name: 'Kestrel', style: 'wounded', clip: 'hurt',
+      offset: [-3.4, 0, -6.2], yaw: 0.7,
+      line: 'Kestrel: —Salí de la cápsula tarde. El sellado no aguantó. Traé algo, ¿sí?',
+    },
+    {
+      name: 'Bru', style: 'technician', clip: 'sit',
+      offset: [4.0, 0, 5.4], yaw: -2.4,
+      line: 'Bru: —Doscientos catorce a bordo. Contamos nueve. Y vos hacés diez.',
+    },
+  ];
+
   function create(opts) {
     const { terrain, sky, audio, hud, seed } = opts;
 
@@ -4585,7 +6626,6 @@ void main(){
         for (let r = 300; r < 620; r += 40) {
           const x = Math.cos(ang) * r, z = Math.sin(ang) * r;
           const h = terrain.heightAt(x, z);
-          // Prefiere altura, y que quede al norte para tener un hito legible.
           const score = h - Math.abs(z + r) * 0.02 + (z < 0 ? 12 : 0);
           if (score > best) { best = score; V3.set(hill, x, h, z); }
         }
@@ -4600,81 +6640,164 @@ void main(){
     V3.set(titan.pos, 0, 0, 40);
     titan.placeFeet();
 
-    // --- modelo del jugador (tercera persona) --------------------------------
-    const suitMat = (a, r, m, e) => ({ albedo: a, rough: r, metal: m, emissive: e || [0, 0, 0], damage: 0 });
+    const particles = EV.Particles.create();
+
+    // --- personajes ----------------------------------------------------------
+    const avatar = EV.Characters.create('engineer', {
+      pos: [player.pos[0], player.pos[1], player.pos[2]],
+      yaw: player.yaw, name: 'jugador', clip: 'idle',
+    });
+    avatar.wear = 0.35;
+
+    const npcs = SURVIVORS.map((s, i) => {
+      const x = spawn[0] + s.offset[0];
+      const z = spawn[2] + s.offset[2];
+      const c = EV.Characters.create(s.style, {
+        pos: [x, terrain.heightAt(x, z), z],
+        yaw: s.yaw, clip: s.clip, name: s.name,
+        offset: i * 1.7,   // desfasa los ciclos: nadie respira sincronizado
+      });
+      c.wear = 0.55 + i * 0.08;
+      c.spec = s;
+      c.greeted = false;
+      c.baseClip = s.clip;
+      return c;
+    });
+
+    const characters = [avatar].concat(npcs);
+
+    // --- campamento ----------------------------------------------------------
+    const camp = EV.Geo.node({ name: 'campamento' });
+    const mat = (a, r, m, e) => ({ albedo: a, rough: r, metal: m, emissive: e || [0, 0, 0], damage: 0 });
     const meshes = {
-      torso: EV.Geo.box(0.62, 0.78, 0.38),
-      hips: EV.Geo.box(0.52, 0.30, 0.34),
-      head: EV.Geo.box(0.30, 0.30, 0.32),
-      visor: EV.Geo.box(0.26, 0.12, 0.06),
-      limb: EV.Geo.cylinder(0.11, 0.09, 1, 8),
-      pack: EV.Geo.box(0.46, 0.50, 0.22),
-      gun: EV.Geo.box(0.10, 0.14, 0.72),
-      antennaMast: EV.Geo.cylinder(0.09, 0.05, 1, 8),
-      antennaDish: EV.Geo.cylinder(1.0, 0.2, 0.24, 14),
+      crate: EV.Geo.box(1, 1, 1),
+      panel: EV.Geo.box(1, 0.08, 1),
+      pole: EV.Geo.cylinder(0.055, 0.045, 1, 8),
+      drum: EV.Geo.cylinder(0.42, 0.42, 1, 14),
+      antennaMast: EV.Geo.cylinder(0.09, 0.05, 1, 10),
+      antennaDish: EV.Geo.cylinder(1.0, 0.2, 0.24, 18),
       antennaBase: EV.Geo.box(1.5, 0.4, 1.5),
+      beacon: EV.Geo.sphere(1, 12, 8),
     };
 
-    const suit = EV.Geo.node({ name: 'jugador' });
-    const suitBody = EV.Geo.node({ pos: [0, 1.30, 0] });
-    suit.children.push(suitBody);
-    const SUIT_A = [0.255, 0.240, 0.220], SUIT_B = [0.150, 0.142, 0.132];
-    suitBody.children.push(
-      EV.Geo.node({ mesh: meshes.torso, pos: [0, 0.10, 0], material: suitMat(SUIT_A, 0.55, 0.35) }),
-      EV.Geo.node({ mesh: meshes.hips, pos: [0, -0.42, 0], material: suitMat(SUIT_B, 0.62, 0.30) }),
-      EV.Geo.node({ mesh: meshes.pack, pos: [0, 0.10, 0.28], material: suitMat(SUIT_B, 0.48, 0.55) }),
-      EV.Geo.node({ mesh: meshes.head, pos: [0, 0.66, 0], material: suitMat(SUIT_B, 0.40, 0.45) }),
-      EV.Geo.node({
-        mesh: meshes.visor, pos: [0, 0.68, -0.16],
-        material: suitMat([0.02, 0.03, 0.04], 0.08, 0.0, [0.10, 0.28, 0.42]),
-      }),
-    );
-    const armR = EV.Geo.node({ pos: [0.40, 0.22, 0], rot: [0.2, 0, 0.12] });
-    armR.children.push(EV.Geo.node({
-      mesh: meshes.limb, pos: [0, -0.32, 0], scl: [1, 0.72, 1], material: suitMat(SUIT_A, 0.6, 0.35),
-    }));
-    const armL = EV.Geo.node({ pos: [-0.40, 0.22, 0], rot: [0.2, 0, -0.12] });
-    armL.children.push(EV.Geo.node({
-      mesh: meshes.limb, pos: [0, -0.32, 0], scl: [1, 0.72, 1], material: suitMat(SUIT_A, 0.6, 0.35),
-    }));
-    const legR = EV.Geo.node({ pos: [0.16, -0.55, 0] });
-    legR.children.push(EV.Geo.node({
-      mesh: meshes.limb, pos: [0, -0.34, 0], scl: [1.1, 0.78, 1.1], material: suitMat(SUIT_B, 0.65, 0.30),
-    }));
-    const legL = EV.Geo.node({ pos: [-0.16, -0.55, 0] });
-    legL.children.push(EV.Geo.node({
-      mesh: meshes.limb, pos: [0, -0.34, 0], scl: [1.1, 0.78, 1.1], material: suitMat(SUIT_B, 0.65, 0.30),
-    }));
-    const gun = EV.Geo.node({
-      mesh: meshes.gun, pos: [0.42, -0.10, -0.30],
-      material: suitMat([0.10, 0.10, 0.11], 0.35, 0.75),
+    const campSeed = EV.makeNoise(seed + 77);
+
+    // Contenedor de suministro: caja con nervios y patín, para que no lea como
+    // un cubo pelado. Se comparte entre todas las instancias del campamento.
+    function crateNode(x, z, w, h, d, yaw, tint) {
+      const gy = terrain.heightAt(x, z);
+      const n = EV.Geo.node({ pos: [x, gy, z], rot: [0, yaw, 0] });
+      n.children.push(EV.Geo.node({
+        mesh: meshes.crate, pos: [0, h * 0.5 + 0.06, 0], scl: [w, h, d],
+        material: mat(tint, 0.58, 0.42),
+      }));
+      // Nervios laterales
+      for (const sx of [-1, 1]) {
+        n.children.push(EV.Geo.node({
+          mesh: meshes.crate, pos: [sx * w * 0.5, h * 0.5 + 0.06, 0],
+          scl: [0.05, h * 0.86, d * 0.94],
+          material: mat([tint[0] * 0.6, tint[1] * 0.6, tint[2] * 0.6], 0.42, 0.75),
+        }));
+      }
+      // Patín: la caja apoya sobre listones, no sobre la arena.
+      n.children.push(EV.Geo.node({
+        mesh: meshes.crate, pos: [0, 0.03, 0], scl: [w * 1.04, 0.07, d * 1.04],
+        material: mat([0.075, 0.070, 0.065], 0.8, 0.3),
+      }));
+      // Franja de identificación
+      n.children.push(EV.Geo.node({
+        mesh: meshes.crate, pos: [0, h * 0.78, -d * 0.51], scl: [w * 0.66, h * 0.14, 0.02],
+        material: mat([0.55, 0.42, 0.10], 0.55, 0.2),
+      }));
+      return n;
+    }
+
+    const CRATE_TINTS = [[0.185, 0.172, 0.152], [0.205, 0.110, 0.062], [0.135, 0.148, 0.155]];
+    // Disposición deliberada: dos hileras junto al toldo y un par sueltas.
+    const CRATE_LAYOUT = [
+      [-2.2, 2.6, 1.15, 0.85, 0.95], [-1.0, 2.6, 1.05, 0.80, 0.90],
+      [-2.2, 2.6, 0.95, 0.70, 0.80], [0.3, 2.9, 1.20, 1.05, 1.00],
+      [2.6, 1.4, 1.00, 0.75, 1.10], [3.4, -0.4, 1.30, 0.90, 0.95],
+      [-4.4, -1.2, 1.10, 1.15, 1.05], [-5.6, 0.6, 0.90, 0.70, 0.85],
+      [1.2, -3.6, 1.25, 0.80, 1.20], [-1.8, -4.4, 1.05, 0.95, 0.90],
+    ];
+    let stackY = 0;
+    CRATE_LAYOUT.forEach((c, i) => {
+      const [ox, oz, w, h, d] = c;
+      const x = spawn[0] + ox, z = spawn[2] + oz;
+      const node = crateNode(x, z, w, h, d, campSeed.rand() * 0.7 - 0.35,
+        CRATE_TINTS[i % CRATE_TINTS.length]);
+      // La tercera entrada apila sobre la anterior: la pila da verticalidad.
+      if (i === 2) node.pos[1] += 0.86;
+      camp.children.push(node);
     });
-    suitBody.children.push(armR, armL, legR, legL, gun);
+
+    // Calentador: el punto de luz que define el campamento.
+    const firePos = V3.create(spawn[0] + 0.6, terrain.heightAt(spawn[0] + 0.6, spawn[2] - 1.2), spawn[2] - 1.2);
+    camp.children.push(EV.Geo.node({
+      mesh: meshes.drum, pos: [firePos[0], firePos[1] + 0.32, firePos[2]],
+      scl: [1, 0.64, 1], material: mat([0.105, 0.098, 0.092], 0.72, 0.65),
+    }));
+    camp.children.push(EV.Geo.node({
+      mesh: meshes.beacon, pos: [firePos[0], firePos[1] + 0.66, firePos[2]],
+      scl: [0.30, 0.14, 0.30],
+      material: mat([0.02, 0.01, 0.005], 0.9, 0, [7.5, 2.6, 0.55]),
+    }));
+    // Tres piedras alrededor del calentador.
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.1 + 0.6;
+      camp.children.push(EV.Geo.node({
+        mesh: meshes.crate,
+        pos: [firePos[0] + Math.cos(a) * 0.95, firePos[1] + 0.10, firePos[2] + Math.sin(a) * 0.95],
+        rot: [0, a, 0], scl: [0.42, 0.24, 0.34],
+        material: mat([0.115, 0.100, 0.088], 0.92, 0.0),
+      }));
+    }
+
+    // Toldo: bajo, inclinado, sostenido por cuatro postes. Da sombra real —
+    // se ve en el mapa de sombras — y una silueta reconocible de lejos.
+    {
+      const cx = spawn[0] - 3.4, cz = spawn[2] + 2.2;
+      const gy = terrain.heightAt(cx, cz);
+      const half = 1.9;
+      for (const [ox, oz, hgt] of [[-half, -half, 2.10], [half, -half, 2.32],
+                                   [-half, half, 1.86], [half, half, 2.08]]) {
+        camp.children.push(EV.Geo.node({
+          mesh: meshes.pole, pos: [cx + ox, gy + hgt * 0.5, cz + oz], scl: [1, hgt, 1],
+          material: mat([0.130, 0.126, 0.120], 0.45, 0.85),
+        }));
+      }
+      camp.children.push(EV.Geo.node({
+        mesh: meshes.panel, pos: [cx, gy + 2.12, cz], rot: [-0.11, 0.14, 0.06],
+        scl: [4.3, 1, 4.3], material: mat([0.245, 0.212, 0.162], 0.88, 0.05),
+      }));
+    }
 
     // --- antena --------------------------------------------------------------
     const antenna = EV.Geo.node({ name: 'antena', pos: [hill[0], hill[1], hill[2]], visible: false });
+    const beaconNode = EV.Geo.node({
+      mesh: meshes.beacon, pos: [0, 7.0, 0], scl: [0.16, 0.16, 0.16],
+      material: mat([0.02, 0.02, 0.02], 0.2, 0, [0.5, 4.5, 1.6]),
+    });
     antenna.children.push(
-      EV.Geo.node({ mesh: meshes.antennaBase, pos: [0, 0.2, 0], material: suitMat([0.13, 0.12, 0.11], 0.7, 0.5) }),
-      EV.Geo.node({ mesh: meshes.antennaMast, pos: [0, 3.2, 0], scl: [1, 6, 1], material: suitMat([0.16, 0.15, 0.14], 0.5, 0.8) }),
+      EV.Geo.node({ mesh: meshes.antennaBase, pos: [0, 0.2, 0], material: mat([0.135, 0.125, 0.115], 0.7, 0.5) }),
+      EV.Geo.node({ mesh: meshes.antennaMast, pos: [0, 3.4, 0], scl: [1, 6.4, 1], material: mat([0.165, 0.155, 0.145], 0.45, 0.85) }),
       EV.Geo.node({
-        mesh: meshes.antennaDish, pos: [0, 6.4, 0], rot: [0.5, 0, 0],
-        material: suitMat([0.20, 0.19, 0.18], 0.35, 0.6),
+        mesh: meshes.antennaDish, pos: [0, 6.5, 0], rot: [0.5, 0, 0],
+        material: mat([0.245, 0.235, 0.220], 0.3, 0.65),
       }),
-      EV.Geo.node({
-        mesh: meshes.head, pos: [0, 6.9, 0], scl: [0.3, 0.3, 0.3],
-        material: suitMat([0.02, 0.02, 0.02], 0.2, 0, [0.4, 1.6, 0.7]),
-      }),
+      beaconNode,
     );
 
     // --- estado del juego ----------------------------------------------------
     const g = {
-      terrain, sky, audio, hud, player, titan, suit, antenna,
-      hill,
-      nodes: [suit, titan.root, antenna],
+      terrain, sky, audio, hud, player, titan, antenna, camp, particles,
+      avatar, npcs, characters, hill, firePos,
+      nodes: [titan.root, antenna, camp],
       time: 0,
-      mode: 'play',            // play | absorb | victory
+      mode: 'play',
       absorbTime: 0,
-      stage: 'hill',           // hill | deploy | titan | climb | core | done
+      stage: 'hill',
       titanAwake: false,
       antennaDeployed: false,
       storm: 0,
@@ -4685,51 +6808,76 @@ void main(){
       difficultyTelegraph: 1.0,
       corruption: 0,
       hitMarker: 0,
-      tracers: [],
       quakeRings: [],
+      lights: [],
       checkpoint: V3.create(spawn[0], 0, spawn[2]),
+      // Estado de animación del avatar
+      stepTimer: 0,
+      landTimer: 0,
+      aimTimer: 0,
+      muzzleTimer: 0,
+      dustTimer: 0,
     };
 
     hud.state.objective = OBJECTIVES.hill.text;
     hud.state.objectiveHint = OBJECTIVES.hill.hint;
 
-    // --- eventos de audio del titán -----------------------------------------
+    // --- eventos del titán ---------------------------------------------------
     titan.onFootfall = (pos, intensity) => {
       const d = V3.dist(pos, player.pos);
       const atten = M.clamp(1 - d / 260, 0, 1);
       if (atten > 0.02) audio.sfx.titanStep(intensity * atten);
       g.camShake = Math.max(g.camShake, atten * atten * 0.5);
+      if (d < 400) particles.emit.titanStep(pos[0], pos[1], pos[2], 0.4 + intensity);
     };
     titan.onAttack = () => audio.sfx.titanAttack();
     titan.onImpact = (kind, a) => {
       audio.sfx.titanImpact();
       g.camShake = Math.max(g.camShake, 1.0);
-      // Resolución de daño: el alcance depende del ataque.
       const d = V3.dist(titan.pos, player.pos);
       let hit = false;
       if (kind === 'quake') hit = player.grounded && d < a.range;
       else {
-        // slam/sweep: cono al frente del titán
         const dx = player.pos[0] - titan.pos[0], dz = player.pos[2] - titan.pos[2];
         const ang = Math.atan2(dx, dz);
         const rel = Math.abs(M.wrapAngle(ang - titan.yaw));
         hit = d < a.range && rel < (kind === 'sweep' ? 1.0 : 0.7);
       }
       if (hit && !player.attached) {
-        if (player.takeDamage(a.damage, g)) {
-          audio.sfx.damage();
-        }
+        if (player.takeDamage(a.damage, g)) audio.sfx.damage();
       }
-      if (kind === 'quake') {
-        g.quakeRings.push({ x: titan.pos[0], z: titan.pos[2], r: 0, life: 1.6 });
-      }
+      // Polvo del impacto delante del titán.
+      const ix = titan.pos[0] + Math.sin(titan.yaw) * -18;
+      const iz = titan.pos[2] + Math.cos(titan.yaw) * -18;
+      particles.emit.titanStep(ix, terrain.heightAt(ix, iz), iz, 1.6);
+      if (kind === 'quake') g.quakeRings.push({ x: titan.pos[0], z: titan.pos[2], r: 0, life: 1.6 });
     };
 
     // --- callbacks del jugador ----------------------------------------------
-    g.onDash = () => audio.sfx.dash();
-    g.onLand = () => audio.sfx.land();
-    g.onHardLanding = () => audio.sfx.hardLanding();
-    g.onThrust = () => { };
+    g.onDash = () => {
+      audio.sfx.dash();
+      avatar.animator.play('dodge', { fade: 0.06, restart: true });
+      particles.emit.landing(player.pos[0], player.pos[1], player.pos[2], 6);
+    };
+    g.onLand = () => {
+      audio.sfx.land();
+      g.landTimer = 0.34;
+      avatar.animator.play('land', { fade: 0.05, restart: true });
+      particles.emit.landing(player.pos[0], player.pos[1], player.pos[2], 5);
+    };
+    g.onHardLanding = (force) => {
+      audio.sfx.hardLanding();
+      g.camShake = Math.max(g.camShake, 0.5);
+      particles.emit.landing(player.pos[0], player.pos[1], player.pos[2], force);
+    };
+    g.onThrust = (dt) => {
+      g.dustTimer -= dt;
+      if (g.dustTimer <= 0) {
+        g.dustTimer = 0.02;
+        particles.emit.thruster(player.pos[0], player.pos[1] + 0.5, player.pos[2],
+          Math.sin(player.yaw), Math.cos(player.yaw));
+      }
+    };
     g.onGrapple = () => audio.sfx.grapple();
     g.onGrappleMiss = () => audio.sfx.grappleMiss();
     g.onAttach = () => {
@@ -4752,6 +6900,7 @@ void main(){
     g.onPlayerDeath = () => {
       audio.sfx.death();
       hud.say('Integridad crítica. Reinicio de traje.', 3);
+      avatar.animator.play('death', { fade: 0.10, restart: true });
     };
     g.dodgeWindowOpen = () => {
       if (!titan.alive) return false;
@@ -4770,11 +6919,12 @@ void main(){
       V3.set(player.pos, g.checkpoint[0],
         terrain.heightAt(g.checkpoint[0], g.checkpoint[2]) + 2, g.checkpoint[2]);
       V3.set(player.vel, 0, 0, 0);
+      avatar.animator.play('idle', { fade: 0.2 });
       if (titan.alive && g.titanAwake) titan.setState('walk');
     };
 
     // --- disparo -------------------------------------------------------------
-    const _ray = V3.create(), _tmp = V3.create(), _hitPt = V3.create();
+    const _ray = V3.create(), _tmp = V3.create(), _hitPt = V3.create(), _muzzle = V3.create();
 
     function raySphere(ro, rd, center, radius) {
       const ox = ro[0] - center[0], oy = ro[1] - center[1], oz = ro[2] - center[2];
@@ -4785,7 +6935,6 @@ void main(){
       const t = -b - Math.sqrt(disc);
       return t > 0 ? t : -1;
     }
-
     function nodeWorldPos(n, out) {
       out[0] = n.world[12]; out[1] = n.world[13]; out[2] = n.world[14];
       return out;
@@ -4801,12 +6950,19 @@ void main(){
       player.fireCooldown = 0.11;
       player.addHeat(player.HEAT.shotCost);
       audio.sfx.shot();
+      g.aimTimer = 1.6;
+      g.muzzleTimer = 0.05;
+      avatar.animator.setAdditive('fire', 1.0);
+      avatar.animator.additiveTime = 0;
 
       player.lookVector(_ray);
-      let bestT = 1e9, bestKind = null, bestIndex = -1;
+      // El fogonazo sale de la mano derecha, no del centro de la cámara.
+      avatar.bonePos('handR', _muzzle);
+      V3.addScaled(_muzzle, _muzzle, _ray, 0.35);
+      particles.emit.muzzle(_muzzle[0], _muzzle[1], _muzzle[2], _ray[0], _ray[1], _ray[2]);
 
+      let bestT = 1e9, bestKind = null, bestIndex = -1;
       if (titan.alive) {
-        // Núcleo primero: tiene prioridad de impacto cuando está expuesto.
         if (titan.core.visible) {
           nodeWorldPos(titan.core, _tmp);
           const t = raySphere(camPos, _ray, _tmp, 3.4);
@@ -4819,31 +6975,30 @@ void main(){
           const t = raySphere(camPos, _ray, _tmp, 3.6);
           if (t > 0 && t < bestT) { bestT = t; bestKind = 'plate'; bestIndex = i; }
         }
-        // Cuerpo: impacta pero casi no hace daño (el blindaje aguanta).
         nodeWorldPos(titan.body, _tmp);
         const tb = raySphere(camPos, _ray, _tmp, 11.0);
         if (tb > 0 && tb < bestT) { bestT = tb; bestKind = 'hull'; }
       }
 
-      V3.addScaled(_hitPt, camPos, _ray, bestKind ? bestT : 400);
-      g.tracers.push({
-        from: V3.create(camPos[0], camPos[1] - 0.25, camPos[2]),
-        to: V3.create(_hitPt[0], _hitPt[1], _hitPt[2]),
-        life: 0.07,
-      });
+      if (bestKind) {
+        V3.addScaled(_hitPt, camPos, _ray, bestT);
+        particles.emit.impact(_hitPt[0], _hitPt[1], _hitPt[2],
+          -_ray[0], -_ray[1], -_ray[2], bestKind !== 'hull');
+      }
 
       if (bestKind === 'plate') {
-        // Desde el suelo el blindaje casi no cede: hay que subir.
         const onTop = !!player.attached;
-        const dmg = onTop ? 26 : 3.5;
-        const broke = titan.damagePlate(bestIndex, dmg);
+        const broke = titan.damagePlate(bestIndex, onTop ? 26 : 3.5);
         audio.sfx.hit();
         g.hitMarker = 0.18;
         if (broke) {
           audio.sfx.plateBreak();
           hud.toast('PLACA DESTRUIDA', 1.4);
-          const left = titan.plates.filter(x => !x.userData.broken).length;
-          if (left === 0) {
+          nodeWorldPos(titan.plates[bestIndex], _tmp);
+          for (let k = 0; k < 4; k++) {
+            particles.emit.impact(_tmp[0], _tmp[1], _tmp[2], 0, 1, 0, true);
+          }
+          if (titan.plates.filter(x => !x.userData.broken).length === 0) {
             setStage('core');
             titan.setState('stunned');
             audio.sfx.titanRoar();
@@ -4853,10 +7008,8 @@ void main(){
         titan.damageCore(34);
         audio.sfx.hit();
         g.hitMarker = 0.25;
-        if (!titan.alive) {
-          beginAbsorb();
-        } else if (titan.hp <= titan.maxHp * (1 - (titan.cycle + 1) / 3)) {
-          // Cierra el ciclo: el blindaje se rehace y sube la agresividad.
+        if (!titan.alive) beginAbsorb();
+        else if (titan.hp <= titan.maxHp * (1 - (titan.cycle + 1) / 3)) {
           titan.resetCycle();
           g.difficultyTelegraph = Math.max(0.6, 1.0 - titan.cycle * 0.18);
           setStage('climb');
@@ -4872,10 +7025,12 @@ void main(){
     function reload() {
       if (player.reloadTimer > 0 || player.ammo === player.maxAmmo || player.reserve <= 0) return;
       player.reloadTimer = 1.5;
+      avatar.animator.setAdditive('reload', 1.0);
+      avatar.animator.additiveTime = 0;
+      g.aimTimer = 1.8;
     }
     g.reload = reload;
 
-    // --- Fractura (poder del núcleo) ----------------------------------------
     function fracture() {
       if (!player.hasFracture || player.fractureCooldown > 0) return;
       if (!player.canSpend(player.HEAT.fractureCost)) return;
@@ -4884,9 +7039,13 @@ void main(){
       audio.sfx.fracture();
       g.camShake = Math.max(g.camShake, 0.8);
       g.quakeRings.push({ x: player.pos[0], z: player.pos[2], r: 0, life: 1.0, friendly: true });
-      // Rompe blindaje en un cono al frente, aunque estés en el suelo.
+      for (let i = 0; i < 40; i++) {
+        const a = (i / 40) * Math.PI * 2;
+        particles.emit.impact(
+          player.pos[0] + Math.cos(a) * 1.5, player.pos[1] + 0.4, player.pos[2] + Math.sin(a) * 1.5,
+          Math.cos(a), 0.35, Math.sin(a), true);
+      }
       if (titan.alive) {
-        player.lookVector(_ray);
         for (let i = 0; i < titan.plates.length; i++) {
           const pl = titan.plates[i];
           if (pl.userData.broken) continue;
@@ -4934,10 +7093,143 @@ void main(){
       audio.sfx.titanRoar();
       hud.say('El traje se está acoplando al núcleo. No sueltes.', 6);
     }
+    g.beginAbsorb = beginAbsorb;
+
+    // --- animación del avatar ------------------------------------------------
+    const _bp = V3.create();
+    function updateAvatar(dt) {
+      V3.copy(avatar.pos, player.pos);
+      avatar.yaw = player.yaw;
+      avatar.pulse = 0.7 + Math.sin(g.time * 2.2) * 0.3;
+
+      const speed = Math.hypot(player.vel[0], player.vel[2]);
+      g.landTimer = Math.max(0, g.landTimer - dt);
+      g.aimTimer = Math.max(0, g.aimTimer - dt);
+
+      // Selección de clip por estado. El orden es la prioridad.
+      const A = avatar.animator;
+      if (player.dead) {
+        if (A.currentName !== 'death') A.play('death', { fade: 0.1 });
+      } else if (player.attached) {
+        A.play('climb', { fade: 0.22 });
+      } else if (!player.grounded) {
+        A.play(player.vel[1] > 0.6 ? 'jump' : 'fall', { fade: 0.14 });
+      } else if (player.dashTimer > 0) {
+        // 'dodge' lo lanza el callback; acá sólo se evita pisarlo.
+      } else if (g.landTimer > 0) {
+        // dejar correr el clip de aterrizaje
+      } else if (speed > 8.6) {
+        A.play('run', { fade: 0.16, speed: M.clamp(speed / 11.5, 0.8, 1.4) });
+      } else if (speed > 0.55) {
+        A.play('walk', { fade: 0.18, speed: M.clamp(speed / 6.4, 0.6, 1.5) });
+      } else {
+        A.play('idle', { fade: 0.28 });
+      }
+
+      // Capa superior: apuntar mientras se dispara o justo después.
+      const additiveName = A.additive ? A.additive.name : null;
+      if (additiveName === 'fire' && A.additiveTime > 0.22) A.setAdditive(null, 0);
+      else if (additiveName === 'reload' && player.reloadTimer <= 0) A.setAdditive(null, 0);
+      if (!A.additive && g.aimTimer > 0 && !player.dead && !player.attached) {
+        A.setAdditive('aim', 1.0);
+      } else if (!A.additive) {
+        A.setAdditive(null, 0);
+      }
+      if (A.additive && A.additive.name === 'aim' && g.aimTimer <= 0) A.setAdditive(null, 0);
+
+      // Polvo de pisada sincronizado con la velocidad real, no con el reloj.
+      if (player.grounded && speed > 1.2) {
+        g.stepTimer -= dt * speed;
+        if (g.stepTimer <= 0) {
+          g.stepTimer = 4.2;
+          particles.emit.footstep(player.pos[0], player.pos[1], player.pos[2], speed);
+        }
+      }
+
+      avatar.visible = true;
+      avatar.update(dt);
+    }
+
+    // --- NPCs ----------------------------------------------------------------
+    function updateNPCs(dt) {
+      for (const c of npcs) {
+        const d = V3.dist(c.pos, player.pos);
+        // Miran al jugador cuando está cerca: es lo que los saca de "estatua".
+        c.lookAt = player.pos;
+        c.lookWeight = M.damp(c.lookWeight, d < 14 ? 1 : 0, 0.35, dt);
+        c.pulse = 0.6 + Math.sin(g.time * 1.7 + c.pos[0]) * 0.4;
+
+        if (!c.greeted && d < 7.5) {
+          c.greeted = true;
+          hud.say(c.spec.line, 6);
+          if (c.baseClip === 'guard' || c.baseClip === 'sit') {
+            c.animator.play('wave', { fade: 0.2, restart: true });
+            c.waveTimer = 2.2;
+          }
+        }
+        if (c.waveTimer > 0) {
+          c.waveTimer -= dt;
+          if (c.waveTimer <= 0) c.animator.play(c.baseClip, { fade: 0.3 });
+        }
+        c.update(dt);
+      }
+    }
+
+    // --- luces dinámicas -----------------------------------------------------
+    const _core = V3.create();
+    function updateLights() {
+      const L = g.lights;
+      L.length = 0;
+
+      // Fogata del campamento: parpadeo con dos senos desfasados, nunca cíclico.
+      const flick = 1 + Math.sin(g.time * 11.3) * 0.12 + Math.sin(g.time * 4.1) * 0.08;
+      L.push({
+        pos: [firePos[0], firePos[1] + 0.9, firePos[2]], radius: 16,
+        color: [1.0, 0.44, 0.14], intensity: 26 * flick,
+      });
+
+      if (g.muzzleTimer > 0) {
+        avatar.bonePos('handR', _bp);
+        L.push({
+          pos: [_bp[0], _bp[1], _bp[2]], radius: 14,
+          color: [1.0, 0.78, 0.45], intensity: 180,
+        });
+      }
+      if (g.antennaDeployed) {
+        L.push({
+          pos: [hill[0], hill[1] + 7.0, hill[2]], radius: 22,
+          color: [0.35, 1.0, 0.55], intensity: 12 + Math.sin(g.time * 3) * 6,
+        });
+        const e = beaconNode.material.emissive;
+        const pulse = 0.5 + Math.sin(g.time * 3) * 0.5;
+        e[0] = 0.5 * pulse; e[1] = 4.5 * pulse; e[2] = 1.6 * pulse;
+      }
+      if (titan.alive && titan.core.visible) {
+        _core[0] = titan.core.world[12]; _core[1] = titan.core.world[13]; _core[2] = titan.core.world[14];
+        L.push({
+          pos: [_core[0], _core[1], _core[2]], radius: 55,
+          color: [1.0, 0.52, 0.16], intensity: 220,
+        });
+      }
+      if (titan.alive && titan.state === 'telegraph') {
+        const t = M.clamp(titan.stateTime / 0.6, 0, 1);
+        L.push({
+          pos: [titan.pos[0], titan.pos[1], titan.pos[2]], radius: 60,
+          color: [1.0, 0.30, 0.10], intensity: 60 * t,
+        });
+      }
+      if (g.mode === 'absorb') {
+        L.push({
+          pos: [player.pos[0], player.pos[1] + 1.2, player.pos[2]], radius: 40,
+          color: [1.0, 0.70, 0.28], intensity: 90 * M.clamp(g.absorbTime / 3, 0, 1),
+        });
+      }
+    }
 
     // --- bucle ---------------------------------------------------------------
     function update(dt, input, camPos) {
       g.time += dt;
+      g.muzzleTimer = Math.max(0, g.muzzleTimer - dt);
 
       // ---- ciclo de tormenta
       g.stormTimer -= dt;
@@ -4949,7 +7241,7 @@ void main(){
       g.storm = M.damp(g.storm, g.stormTarget, 5.0, dt);
       sky.setTurbidity(1.0 + g.storm * 2.6);
 
-      // ---- sol: ciclo lento de Kether-3 (90 min reales)
+      // ---- sol: ciclo lento de Kether-3
       const dayAngle = 0.55 + g.time * 0.00116;
       sky.setSun([Math.cos(dayAngle) * 0.82, Math.sin(dayAngle) * 0.92 + 0.06, -0.42]);
 
@@ -4961,15 +7253,15 @@ void main(){
         player.heat = Math.max(0, player.heat - 30 * dt);
         g.corruption = M.clamp(g.absorbTime / 6.0, 0, 1) * 0.55;
         g.camShake = Math.max(g.camShake, 0.35 + Math.sin(g.time * 9) * 0.15);
+        for (let i = 0; i < 3; i++) {
+          particles.emit.absorb(player.pos[0], player.pos[1] + 1, player.pos[2]);
+        }
         if (g.absorbTime > 6.0 && !player.hasFracture) {
           player.hasFracture = true;
           setStage('done');
           hud.toast('FRACTURA DESBLOQUEADA', 3);
         }
-        if (g.absorbTime > 9.0) {
-          g.mode = 'play';
-          player.detach();
-        }
+        if (g.absorbTime > 9.0) { g.mode = 'play'; player.detach(); }
       }
 
       if (player.reloadTimer > 0) {
@@ -4982,10 +7274,8 @@ void main(){
         }
       }
 
-      // ---- titán
       titan.update(dt, player, g);
 
-      // ---- disponibilidad de gancho (lectura del HUD)
       g.grappleAvailable = titan.alive && g.titanAwake && !player.attached &&
         !!titan.nearestAnchor(player.pos, player.SUIT.grappleRange);
 
@@ -5001,26 +7291,26 @@ void main(){
         hud.state.prompt = '';
       }
 
-      // ---- modelo del jugador sigue al personaje
-      V3.copy(suit.pos, player.pos);
-      suit.rot[1] = player.yaw;
-      const speed = Math.hypot(player.vel[0], player.vel[2]);
-      const bob = Math.sin(g.time * 9.0) * M.clamp(speed / 10, 0, 1);
-      suitBody.pos[1] = 1.30 + bob * 0.05;
-      armR.rot[0] = 0.2 + bob * 0.5;
-      armL.rot[0] = 0.2 - bob * 0.5;
-      legR.rot[0] = -bob * 0.6;
-      legL.rot[0] = bob * 0.6;
-      // El personaje se oculta al ir en primera persona sobre el titán.
-      suit.visible = !player.dead;
-      EV.Geo.updateWorld(suit, null);
-      EV.Geo.updateWorld(antenna, null);
+      updateAvatar(dt);
+      updateNPCs(dt);
+      updateLights();
 
-      // ---- efectos temporales
-      for (let i = g.tracers.length - 1; i >= 0; i--) {
-        g.tracers[i].life -= dt;
-        if (g.tracers[i].life <= 0) g.tracers.splice(i, 1);
+      EV.Geo.updateWorld(antenna, null);
+      EV.Geo.updateWorld(camp, null);
+
+      // ---- partículas ambientales: brasas del campamento y polvo en el aire
+      if (V3.dist(player.pos, firePos) < 60 && Math.random() < 0.5) {
+        particles.emit.ember(firePos[0], firePos[1] + 0.75, firePos[2]);
       }
+      const dustRate = 2 + g.storm * 26;
+      g.dustAccum = (g.dustAccum || 0) + dt * dustRate;
+      while (g.dustAccum >= 1) {
+        g.dustAccum -= 1;
+        particles.emit.ambientDust(camPos[0], camPos[1], camPos[2], g.storm);
+      }
+      // El viento sopla del oeste y arrastra todo lo suspendido.
+      particles.update(dt, [4 + g.storm * 26, 0, 1.5 + g.storm * 7]);
+
       for (let i = g.quakeRings.length - 1; i >= 0; i--) {
         const q = g.quakeRings[i];
         q.r += dt * 70;
@@ -5030,12 +7320,11 @@ void main(){
       g.camShake = M.damp(g.camShake, 0, 0.16, dt);
       g.hitMarker = Math.max(0, g.hitMarker - dt);
 
-      // ---- audio continuo
       audio.update(dt, {
         storm: g.storm,
         heat: player.heat,
         integrity: player.integrity,
-        speed,
+        speed: Math.hypot(player.vel[0], player.vel[2]),
         inHub: false,
         titanProximity: titan.alive && g.titanAwake
           ? M.clamp(1 - V3.dist(titan.pos, player.pos) / 220, 0, 1) : 0,
@@ -5049,7 +7338,7 @@ void main(){
     return g;
   }
 
-  EV.Game = { create, OBJECTIVES };
+  EV.Game = { create, OBJECTIVES, SURVIVORS };
 })(window.EV = window.EV || {});
 
 /* ===== 99-main.js ===== */
@@ -5137,6 +7426,9 @@ void main(){
       },
       sky, terrain, props,
       nodes: game.nodes,
+      characters: game.characters,
+      particles: game.particles,
+      lights: game.lights,
       time: 0,
       storm: 0,
       fogDensity: 0.00013,
@@ -5226,7 +7518,7 @@ void main(){
     const camDesired = V3.create();
     const camPos = V3.create();
     const look = V3.create();
-    let camDist = 5.4;
+    let camDist = 4.4;
     let firstFrame = true;
 
     function updateCamera(dt) {
@@ -5234,12 +7526,12 @@ void main(){
       p.lookVector(look);
 
       // Objetivo: la cabeza, con offset de hombro.
-      V3.set(camTarget, p.pos[0], p.pos[1] + 1.55, p.pos[2]);
+      V3.set(camTarget, p.pos[0], p.pos[1] + 1.45, p.pos[2]);
       const rightX = Math.cos(p.yaw), rightZ = -Math.sin(p.yaw);
-      camTarget[0] += rightX * 0.55;
-      camTarget[2] += rightZ * 0.55;
+      camTarget[0] += rightX * 0.62;
+      camTarget[2] += rightZ * 0.62;
 
-      const targetDist = p.attached ? 7.2 : 5.4;
+      const targetDist = p.attached ? 6.6 : (Math.hypot(p.vel[0], p.vel[2]) > 9 ? 5.0 : 4.4);
       camDist = M.damp(camDist, targetDist, 0.25, dt);
 
       V3.addScaled(camDesired, camTarget, look, -camDist);
@@ -5372,6 +7664,9 @@ void main(){
       window.EV_STATS = {
         fps: Math.round(fps), quality,
         stage: game.stage, storm: +game.storm.toFixed(2),
+        particles: game.particles.count,
+        clip: game.avatar.animator.currentName,
+        chars: game.characters.length,
         titanHp: game.titan.hp, playerIntegrity: Math.round(game.player.integrity),
       };
     }

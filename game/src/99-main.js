@@ -82,6 +82,9 @@
       },
       sky, terrain, props,
       nodes: game.nodes,
+      characters: game.characters,
+      particles: game.particles,
+      lights: game.lights,
       time: 0,
       storm: 0,
       fogDensity: 0.00013,
@@ -171,7 +174,7 @@
     const camDesired = V3.create();
     const camPos = V3.create();
     const look = V3.create();
-    let camDist = 5.4;
+    let camDist = 4.4;
     let firstFrame = true;
 
     function updateCamera(dt) {
@@ -179,12 +182,12 @@
       p.lookVector(look);
 
       // Objetivo: la cabeza, con offset de hombro.
-      V3.set(camTarget, p.pos[0], p.pos[1] + 1.55, p.pos[2]);
+      V3.set(camTarget, p.pos[0], p.pos[1] + 1.45, p.pos[2]);
       const rightX = Math.cos(p.yaw), rightZ = -Math.sin(p.yaw);
-      camTarget[0] += rightX * 0.55;
-      camTarget[2] += rightZ * 0.55;
+      camTarget[0] += rightX * 0.62;
+      camTarget[2] += rightZ * 0.62;
 
-      const targetDist = p.attached ? 7.2 : 5.4;
+      const targetDist = p.attached ? 6.6 : (Math.hypot(p.vel[0], p.vel[2]) > 9 ? 5.0 : 4.4);
       camDist = M.damp(camDist, targetDist, 0.25, dt);
 
       V3.addScaled(camDesired, camTarget, look, -camDist);
@@ -317,6 +320,9 @@
       window.EV_STATS = {
         fps: Math.round(fps), quality,
         stage: game.stage, storm: +game.storm.toFixed(2),
+        particles: game.particles.count,
+        clip: game.avatar.animator.currentName,
+        chars: game.characters.length,
         titanHp: game.titan.hp, playerIntegrity: Math.round(game.player.integrity),
       };
     }

@@ -14,7 +14,7 @@ npx http-server -p 8080 .      # cualquier servidor estático sirve
 ```
 
 O directamente el archivo único empaquetado: `dist/ecos-del-vacio.html`
-(198 KB, se abre sin servidor).
+(~300 KB, se abre sin servidor, sin dependencias ni assets externos).
 
 ### Controles
 
@@ -49,6 +49,64 @@ planeta · `?taa=0` desactiva el TAA.
 | Progresión por absorción | Romper las cinco placas expone el núcleo. Tres ciclos lo matan. La absorción desbloquea **Fractura** y sube la corrupción, que altera el post-proceso. |
 | Clima con efecto mecánico | La tormenta de cristal sube la turbidez atmosférica, espesa los volumétricos y reduce la visibilidad a metros — el titán se vuelve una silueta. |
 | El traje como narrador | Ventilación que sube de tono con el calor, respiración que se acelera al perder integridad, dron precursor que aparece cerca del titán. Todo sintetizado con WebAudio. |
+| Referencia humana constante | Cinco personajes con esqueleto de 19 huesos y 17 clips de animación: el jugador y cuatro supervivientes de la Meridiano en un campamento, cada uno con su pose, su paleta y su línea de diálogo. |
+
+## Personajes
+
+Cinco personajes animados, generados por código y exportables a glTF.
+
+**Esqueleto y malla.** Un esqueleto humano de 19 huesos (`src/51-characters.js`)
+y un generador de malla con piel (`src/49-charmesh.js`) que construye tubos
+elípticos entre huesos, articulaciones esféricas y placas de blindaje biseladas.
+Los pesos se mezclan en las puntas de cada tubo para que codos y rodillas se
+doblen sin pellizcarse. Cuatro estilos —ingeniero, seguridad, técnica, herida—
+comparten el esqueleto y difieren en blindaje, casco, corpulencia y paleta.
+Entre 4.300 y 5.100 triángulos por personaje, **un solo draw call cada uno**:
+los cuatro submateriales (traje, blindaje, visor, acento) viajan en un atributo
+por vértice y se resuelven en el fragment shader.
+
+**Animación.** 17 clips escritos a mano en grados, con pistas por hueso:
+`idle`, `walk`, `run`, `jump`, `fall`, `land`, `dodge`, `aim`, `fire`, `reload`,
+`climb`, `death`, `sit`, `work`, `guard`, `hurt`, `wave`. El sistema
+(`src/48-anim.js`) mezcla por slerp de cuaterniones con corrección de
+hemisferio, hace fundido cruzado entre clips y admite una capa superior —
+apuntar sobreescribe torso y brazos mientras las piernas siguen corriendo.
+Las matrices de piel suben a una textura RGBA32F de cuatro téxeles por hueso,
+porque con uniformes `mat4` se choca contra `MAX_VERTEX_UNIFORM_VECTORS`. Se
+sube también la textura del frame anterior, para que el TAA tenga velocidad
+correcta en miembros en movimiento y no deje estela.
+
+**Mirada.** Los NPC giran cabeza y pecho hacia el jugador cuando se acerca, con
+límite de giro y desvanecido fuera de ~100°. Es barato y es lo que los saca de
+parecer estatuas.
+
+## Exportación a glTF
+
+Los personajes no se quedan encerrados en el juego:
+
+```bash
+node tools/export-gltf.mjs          # → assets/characters/*.glb
+node tools/validate-glb.mjs         # verifica los archivos generados
+```
+
+`tools/gltf-exporter.js` produce **glTF 2.0 binario** con malla, esqueleto,
+matrices de bind inversas, pesos de piel y las 17 animaciones completas (175
+canales por personaje). Abre en Blender, Maya o three.js. Reutiliza exactamente
+la misma geometría y los mismos clips que corren en el juego — no hay una
+segunda fuente de verdad. El submaterial por vértice viaja como `TEXCOORD_1.x`,
+porque glTF no tiene un canal genérico y así sobrevive el viaje sin inventar una
+extensión.
+
+`tools/validate-glb.mjs` comprueba cabecera, límites de accesores, alineación de
+vistas, integridad de la jerarquía de huesos, rango de índices, normalización de
+pesos de piel y coherencia de cada canal de animación.
+
+| Personaje | Triángulos | Huesos | Animaciones | Tamaño |
+|---|---|---|---|---|
+| `engineer.glb` | 5.100 | 19 | 17 | 294 KB |
+| `soldier.glb` | 4.980 | 19 | 17 | 288 KB |
+| `technician.glb` | 4.680 | 19 | 17 | 273 KB |
+| `wounded.glb` | 4.320 | 19 | 17 | 257 KB |
 
 ## Pipeline de render
 
@@ -62,8 +120,15 @@ Ocho pases por frame, todos en `src/70-renderer.js`:
 3. **SSAO** a media resolución + desenfoque bilateral guiado por profundidad.
 4. **Opaco hacia adelante** — PBR Cook-Torrance GGX con Smith height-correlated
    y difuso Burley; IBL especular desde los mips del cubemap de cielo e
-   irradiancia difusa por convolución coseno.
+   irradiancia difusa por convolución coseno. Incluye **sombras de contacto**
+   (marcha corta contra el búfer de profundidad, que resuelve el contacto
+   pie-suelo que las cascadas no alcanzan) y hasta **8 luces puntuales** con
+   caída inversa al cuadrado y ventana suave: fogonazo del arma, calentador del
+   campamento, núcleo del titán, baliza de la antena.
 5. **Volumétricos** — raymarch con prueba de sombra por paso, jitter temporal.
+   Las **partículas** (polvo, chispas, brasas, tormenta) se dibujan dentro del
+   búfer de escena, con suavizado contra la profundidad, para que la niebla y la
+   perspectiva aérea también actúen sobre ellas.
 6. **Bloom** — cadena de mips con filtro de 13 taps y reconstrucción tienda.
 7. **TAA** — jitter Halton, dilatación de velocidad y acotado por varianza.
 8. **Cadena de cámara** — lente física, ACES, gradación lift/gamma/gain, grano.
@@ -105,13 +170,13 @@ geometría real.
 Todo lo que cuesta milisegundos es un `#define` de shader, así que bajar calidad
 recompila más barato en vez de ramificar en tiempo de ejecución.
 
-| Preset | Sombra | Taps | SSAO | Volumétrico |
-|---|---|---|---|---|
-| `ultra` | 2048² | 12 | 16 | 32 pasos |
-| `alto` (defecto en GPU) | 2048² | 12 | 12 | 24 pasos |
-| `medio` | 1024² | 8 | 8 | 16 pasos |
-| `bajo` | 768² | 4 | 6 | 10 pasos |
-| `minimo` (defecto en SwiftShader) | 512² | 1 | 4 | 6 pasos |
+| Preset | Sombra | Taps | SSAO | Volumétrico | Contacto |
+|---|---|---|---|---|---|
+| `ultra` | 2048² | 12 | 16 | 32 pasos | sí |
+| `alto` (defecto en GPU) | 2048² | 12 | 12 | 24 pasos | sí |
+| `medio` | 1024² | 8 | 8 | 16 pasos | sí |
+| `bajo` | 768² | 4 | 6 | 10 pasos | no |
+| `minimo` (defecto en SwiftShader) | 512² | 1 | 4 | 6 pasos | no |
 
 El preset se elige solo sondeando el renderer real: si detecta rasterizado por
 CPU (SwiftShader, llvmpipe) baja a `minimo`, donde si no serían segundos por
@@ -125,11 +190,15 @@ node tests/loop-test.mjs http://localhost:8080/index.html?q=minimo
 ```
 
 Recorre la cadena de misión completa con paso de tiempo fijo (independiente del
-framerate) y comprueba 28 invariantes: progresión de objetivos, marcha y apoyo
-de las patas sobre el terreno, resistencia del blindaje desde el suelo frente a
-desde arriba, escalada por anclajes, ciclos de núcleo, sistema térmico,
-i-frames del esquive, muerte y reaparición, y el efecto de la tormenta sobre la
-atmósfera.
+framerate) y comprueba **43 invariantes**: progresión de objetivos, marcha y
+apoyo de las patas sobre el terreno, resistencia del blindaje desde el suelo
+frente a desde arriba, escalada por anclajes, ciclos de núcleo, sistema térmico,
+i-frames del esquive, muerte y reaparición, efecto de la tormenta sobre la
+atmósfera, y —para los personajes— conteo de huesos, geometría de la malla,
+estilos distintos, que cada NPC anime su clip propio, la máquina de estados de
+animación del jugador (caminar/correr/saltar/escalar), desplazamiento real de
+los pies, matrices de piel finitas, ciclo de vida de las partículas y límite de
+luces del shader.
 
 `tests/screenshot.mjs` levanta el juego, ejecuta un script de posicionamiento
 opcional y captura — es lo que se usó para verificar cada cambio visual.
@@ -138,13 +207,18 @@ opcional y captura — es lo que se usó para verificar cada cambio visual.
 
 ```
 src/00-math.js         vec3 / mat4, amortiguación independiente del framerate
+src/05-quat.js         cuaterniones: slerp con corrección de hemisferio
 src/10-gl.js           capa fina sobre WebGL2: programas, FBOs, VAOs
 src/20-noise.js        simplex sembrado: el planeta es siempre el mismo
 src/30-shaders.js      chunks GLSL: atmósfera, PBR, sombras, ACES
 src/40-sky.js          cielo a cubemap + IBL difuso y especular
 src/45-terrain.js      dunas de Kether-3, consulta de altura en CPU, campo lejano
-src/50-geometry.js     primitivas y grafo de nodos
-src/52-props.js        cristales y chatarra instanciados
+src/48-anim.js         esqueleto, clips, mezcla por slerp, textura de huesos
+src/49-charmesh.js     generación de malla con piel (tubos, articulaciones, placas)
+src/50-geometry.js     primitivas, racimos de cristal, rocas y grafo de nodos
+src/51-characters.js   esqueleto humano, cuatro estilos de traje, 17 clips
+src/52-props.js        cristales, rocas y chatarra instanciados
+src/56-particles.js    polvo, chispas, brasas y tormenta (billboards suavizados)
 src/60-shaders-geo.js  shaders de sombra, prepase y opaco
 src/62-shaders-post.js SSAO, volumétricos, bloom, TAA, cadena de cámara
 src/70-renderer.js     orquestación del frame
@@ -154,6 +228,9 @@ src/80-audio.js        síntesis WebAudio, sin assets
 src/85-hud.js          HUD mínimo en el borde del visor
 src/90-game.js         misión, combate, clima
 src/99-main.js         arranque, entrada, cámara, bucle
+tools/gltf-exporter.js exportador glTF 2.0 con piel y animaciones
+tools/export-gltf.mjs  vuelca los personajes a assets/characters/*.glb
+tools/validate-glb.mjs valida los .glb generados
 ```
 
 ## Alcance honesto

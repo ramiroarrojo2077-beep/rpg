@@ -136,7 +136,74 @@ const report = await page.evaluate(async () => {
   check('reaparece con integridad completa',
         !g.player.dead && g.player.integrity === 100, g.player.integrity);
 
-  // --- 14. el ciclo de tormenta altera la atmósfera
+  // --- 14. personajes: malla con piel, esqueleto y clips
+  const sk = g.avatar.skeleton;
+  check('el esqueleto tiene los huesos esperados', sk.count === 19, `${sk.count} huesos`);
+  check('la malla del jugador tiene geometría',
+        g.avatar.mesh.triangles > 3000, `${g.avatar.mesh.triangles} triángulos`);
+  check('hay cuatro supervivientes además del jugador',
+        g.npcs.length === 4 && g.characters.length === 5, `${g.characters.length} personajes`);
+  const stylesSeen = new Set(g.characters.map(c => c.style));
+  check('los personajes usan estilos distintos', stylesSeen.size >= 3,
+        Array.from(stylesSeen).join(', '));
+
+  // La bind pose no debe sobrevivir: si la pose no cambia, la animación no corre.
+  const bind = sk.bindRot;
+  const poseDiff = (c) => {
+    let m = 0;
+    for (let i = 0; i < c.pose.rot.length; i++) m = Math.max(m, Math.abs(c.pose.rot[i] - bind[i]));
+    return m;
+  };
+  step(60);
+  check('los NPC animan su clip propio',
+        g.npcs.every(c => poseDiff(c) > 0.05),
+        g.npcs.map(c => `${c.name}:${c.animator.currentName}`).join(' '));
+
+  // --- 15. máquina de estados de animación del jugador
+  input.moveZ = 1; step(50);
+  check('caminar activa el clip de marcha', g.avatar.animator.currentName === 'walk',
+        g.avatar.animator.currentName);
+  const footA = new Float32Array(3); g.avatar.bonePos('footL', footA);
+  step(14);
+  const footB = new Float32Array(3); g.avatar.bonePos('footL', footB);
+  const travel = Math.hypot(footA[0]-footB[0], footA[1]-footB[1], footA[2]-footB[2]);
+  check('los pies se desplazan al caminar', travel > 0.2, `${travel.toFixed(2)} m`);
+
+  input.sprint = true; step(60);
+  check('correr activa el clip de carrera', g.avatar.animator.currentName === 'run',
+        g.avatar.animator.currentName);
+  input.sprint = false; input.moveZ = 0; step(40);
+
+  g.player.grounded = false; g.player.vel[1] = 6; step(6);
+  check('estar en el aire activa el clip de salto', g.avatar.animator.currentName === 'jump',
+        g.avatar.animator.currentName);
+  g.player.grounded = true; g.player.vel[1] = 0; step(50);
+
+  g.player.attached = g.titan.anchorByName('lomo'); step(20);
+  check('engancharse activa el clip de escalada', g.avatar.animator.currentName === 'climb',
+        g.avatar.animator.currentName);
+  g.player.detach(); step(30);
+
+  // Las matrices de piel deben ser finitas: un NaN acá borra el personaje.
+  const skinArr = g.avatar.skin.skin;
+  let finite = true;
+  for (let i = 0; i < skinArr.length; i++) if (!Number.isFinite(skinArr[i])) finite = false;
+  check('las matrices de piel son finitas', finite);
+
+  // --- 16. partículas
+  const before = g.particles.count;
+  g.particles.emit.landing(g.player.pos[0], g.player.pos[1], g.player.pos[2], 10);
+  check('los emisores generan partículas', g.particles.count > before,
+        `${before} → ${g.particles.count}`);
+  step(240);
+  check('las partículas expiran y liberan el pool',
+        g.particles.count < g.particles.capacity, `${g.particles.count}/${g.particles.capacity}`);
+
+  // --- 17. luces dinámicas
+  check('el campamento aporta una luz', g.lights.length >= 1, `${g.lights.length} luces`);
+  check('las luces no exceden el máximo del shader', g.lights.length <= 8, `${g.lights.length}`);
+
+  // --- 18. el ciclo de tormenta altera la atmósfera
   g.stormTarget = 1.0;
   step(300);
   check('la tormenta sube la turbidez atmosférica',

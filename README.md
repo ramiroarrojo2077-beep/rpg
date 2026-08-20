@@ -69,10 +69,17 @@ O el archivo único: `game/dist/ecos-del-vacio.html`.
 
 Implementa la cadena causal sin marcadores, el calor como recurso único, el
 titán como terreno escalable por anclajes, y el clima con consecuencia mecánica.
-El pipeline de render (sombras en cascada, PBR con IBL atmosférico, SSAO,
-volumétricos con prueba de sombra, bloom, TAA y cadena de cámara con ACES) está
-documentado en [`game/README.md`](game/README.md). 28 pruebas automatizadas
-cubren el bucle de misión completo.
+
+**Cinco personajes animados** —el jugador y cuatro supervivientes de la
+Meridiano— con esqueleto de 19 huesos, malla con piel generada por código y 17
+clips de animación mezclados por slerp. Se exportan a **glTF 2.0 binario** con
+`node tools/export-gltf.mjs`, listos para abrir en Blender o three.js.
+
+El pipeline de render (sombras en cascada y de contacto, PBR con IBL
+atmosférico, SSAO, volumétricos con prueba de sombra, luces puntuales,
+partículas, bloom, TAA y cadena de cámara con ACES) está documentado en
+[`game/README.md`](game/README.md). 43 pruebas automatizadas cubren el bucle de
+misión completo, la máquina de estados de animación y los assets exportados.
 
 ## Estado
 
