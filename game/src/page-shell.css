@@ -1,0 +1,165 @@
+/* Ecos del Vacío — chrome de la página.
+   Tema único y deliberado: la página es una mirilla a la cara nocturna de un
+   desierto. Un tema claro no tendría sentido, así que todo color se pinta
+   explícito y nada depende del fondo del anfitrión.
+
+   Paleta tomada del guion de color de Kether-3 (docs/09): ámbar y ocre sobre
+   el negro azulado del vacío, con el cian del visor sólo en las teclas. */
+:root {
+  --vacio:      #08090c;
+  --vacio-alto: #101319;
+  --arena:      #e9e3d5;
+  --polvo:      #9a9083;
+  --ambar:      #e0913c;
+  --ocre:       #7a4a22;
+  --visor:      #57a9d6;
+  --linea:      rgba(233, 227, 213, 0.14);
+
+  --display: "Chakra Petch", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--vacio);
+  color: var(--arena);
+  font-family: var(--mono);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { position: fixed; inset: 0; background: var(--vacio); }
+#gl { display: block; width: 100%; height: 100%; }
+
+/* --- superposición de portada / pausa ---------------------------------- */
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(20px, 5vw, 64px);
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 9, 12, 0.88), rgba(8, 9, 12, 0.97)),
+    var(--vacio);
+  cursor: pointer;
+  z-index: 10;
+  transition: opacity 0.55s ease;
+}
+#overlay[hidden] { display: none; }
+
+.ov-inner {
+  width: min(680px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.ov-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--ambar);
+  /* Un filete que arranca en el texto y se pierde: instrumentación, no adorno. */
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ov-eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--ocre), transparent);
+}
+
+.ov-title {
+  font-family: var(--display);
+  font-weight: 300;
+  font-size: clamp(38px, 8.5vw, 76px);
+  line-height: 0.95;
+  letter-spacing: 0.04em;
+  text-wrap: balance;
+}
+.ov-title em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--ambar);
+}
+
+.ov-lede {
+  max-width: 46ch;
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--polvo);
+}
+
+.ov-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  gap: 9px 30px;
+  border-top: 1px solid var(--linea);
+  border-bottom: 1px solid var(--linea);
+  padding: 20px 0;
+  margin: 4px 0;
+}
+.ov-key {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--polvo);
+}
+.ov-key dt { flex: 0 0 auto; }
+.ov-key dd { color: var(--polvo); }
+kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--visor);
+  border: 1px solid rgba(87, 169, 214, 0.32);
+  border-radius: 2px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.ov-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  align-self: flex-start;
+  font-size: 12px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--arena);
+  border: 1px solid var(--ocre);
+  padding: 13px 26px;
+  transition: border-color 0.25s ease, color 0.25s ease;
+}
+#overlay:hover .ov-start { border-color: var(--ambar); color: var(--ambar); }
+.ov-start::before {
+  content: "";
+  width: 6px; height: 6px;
+  background: var(--ambar);
+  /* Latido lento: el traje está encendido y esperando. */
+  animation: pulso 2.6s ease-in-out infinite;
+}
+@keyframes pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .ov-start::before { animation: none; }
+  #overlay { transition: none; }
+}
+
+.ov-meta {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: rgba(154, 144, 131, 0.55);
+}
+
+.ov-note {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--polvo);
+  max-width: 46ch;
+}
+.ov-note strong { color: var(--ambar); font-weight: 500; }
+
+:focus-visible { outline: 2px solid var(--visor); outline-offset: 3px; }

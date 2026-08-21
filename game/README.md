@@ -14,7 +14,17 @@ npx http-server -p 8080 .      # cualquier servidor estático sirve
 ```
 
 O directamente el archivo único empaquetado: `dist/ecos-del-vacio.html`
-(~300 KB, se abre sin servidor, sin dependencias ni assets externos).
+(~310 KB, se abre con doble clic, sin servidor ni dependencias).
+
+`node build.mjs` genera dos salidas: ese documento completo y
+`dist/artifact.html`, el mismo juego como fragmento de página para publicarlo
+hospedado (el anfitrión aporta `<!doctype>`, `<head>` y `<body>`).
+
+**Sin bloqueo de puntero.** Embebido en un iframe, la política de permisos suele
+denegar `requestPointerLock`, y sin alternativa el ratón no giraría la cámara.
+El juego lo detecta —por promesa rechazada, por evento de error o por tiempo de
+espera— y pasa a un modo equivalente: arrastrar mira, un clic corto sin
+desplazamiento dispara, y `J` queda como tecla de disparo.
 
 ### Controles
 
@@ -61,9 +71,18 @@ elípticos entre huesos, articulaciones esféricas y placas de blindaje biselada
 Los pesos se mezclan en las puntas de cada tubo para que codos y rodillas se
 doblen sin pellizcarse. Cuatro estilos —ingeniero, seguridad, técnica, herida—
 comparten el esqueleto y difieren en blindaje, casco, corpulencia y paleta.
-Entre 4.300 y 5.100 triángulos por personaje, **un solo draw call cada uno**:
-los cuatro submateriales (traje, blindaje, visor, acento) viajan en un atributo
-por vértice y se resuelven en el fragment shader.
+Entre 8.100 y 9.700 triángulos por personaje, **un solo draw call cada uno**:
+los cinco submateriales (traje, blindaje, visor, acento, goma) viajan en un
+atributo por vértice y se resuelven en el fragment shader. El detalle está
+donde se mira: casco con mentonera, marco de visor y cresta; hombreras en dos
+placas articuladas; coderas, rodilleras, cartucheras, arnés cruzado, bota con
+puntera reforzada y mano con bloque de pulgar.
+
+**Color.** Toda la iluminación de Kether-3 es ámbar —sol cálido más IBL de
+arena—, así que un traje de color neutro se vuelve dorado y la silueta se funde
+con la duna. Las bases de los cuatro trajes son deliberadamente frías: es lo que
+separa al personaje del terreno. El tejido además tiene brillo de borde, que es
+lo que distingue una tela de un plástico mate.
 
 **Animación.** 17 clips escritos a mano en grados, con pistas por hueso:
 `idle`, `walk`, `run`, `jump`, `fall`, `land`, `dodge`, `aim`, `fire`, `reload`,
@@ -103,14 +122,14 @@ pesos de piel y coherencia de cada canal de animación.
 
 | Personaje | Triángulos | Huesos | Animaciones | Tamaño |
 |---|---|---|---|---|
-| `engineer.glb` | 5.100 | 19 | 17 | 294 KB |
-| `soldier.glb` | 4.980 | 19 | 17 | 288 KB |
-| `technician.glb` | 4.680 | 19 | 17 | 273 KB |
-| `wounded.glb` | 4.320 | 19 | 17 | 257 KB |
+| `engineer.glb` | 9.728 | 19 | 17 | 488 KB |
+| `soldier.glb` | 9.428 | 19 | 17 | 473 KB |
+| `technician.glb` | 9.068 | 19 | 17 | 455 KB |
+| `wounded.glb` | 8.168 | 19 | 17 | 413 KB |
 
 ## Pipeline de render
 
-Ocho pases por frame, todos en `src/70-renderer.js`:
+Nueve pases por frame, todos en `src/70-renderer.js`:
 
 1. **Sombras en cascada** — 3 niveles, ajuste por esfera envolvente y snap a
    téxel (sin hormigueo al girar la cámara), muestreo Poisson de 12 taps con
@@ -125,13 +144,20 @@ Ocho pases por frame, todos en `src/70-renderer.js`:
    pie-suelo que las cascadas no alcanzan) y hasta **8 luces puntuales** con
    caída inversa al cuadrado y ventana suave: fogonazo del arma, calentador del
    campamento, núcleo del titán, baliza de la antena.
-5. **Volumétricos** — raymarch con prueba de sombra por paso, jitter temporal.
+5. **Reflejos en espacio de pantalla** — marcha del rayo reflejado contra el
+   búfer de profundidad, con refinado binario, ventana de espesor proporcional
+   al paso y desvanecido en los bordes del encuadre. El prepase escribe el color
+   especular (f0) en un tercer destino, sin el cual el pase no puede saber
+   cuánto refleja cada píxel. Donde el rayo se escapa, queda el IBL del cielo.
+6. **Volumétricos** — raymarch con prueba de sombra por paso, jitter temporal.
    Las **partículas** (polvo, chispas, brasas, tormenta) se dibujan dentro del
    búfer de escena, con suavizado contra la profundidad, para que la niebla y la
    perspectiva aérea también actúen sobre ellas.
-6. **Bloom** — cadena de mips con filtro de 13 taps y reconstrucción tienda.
-7. **TAA** — jitter Halton, dilatación de velocidad y acotado por varianza.
-8. **Cadena de cámara** — lente física, ACES, gradación lift/gamma/gain, grano.
+7. **Bloom** — cadena de mips con filtro de 13 taps y reconstrucción tienda.
+8. **TAA** — jitter Halton, dilatación de velocidad y acotado por varianza.
+9. **Cadena de cámara** — realce de contraste local (el TAA ablanda, esto
+   devuelve el filo sin los halos de un unsharp mask), lente física, ACES,
+   gradación lift/gamma/gain, grano.
 
 ### La atmósfera es la fuente de verdad de la iluminación
 
@@ -170,13 +196,13 @@ geometría real.
 Todo lo que cuesta milisegundos es un `#define` de shader, así que bajar calidad
 recompila más barato en vez de ramificar en tiempo de ejecución.
 
-| Preset | Sombra | Taps | SSAO | Volumétrico | Contacto |
-|---|---|---|---|---|---|
-| `ultra` | 2048² | 12 | 16 | 32 pasos | sí |
-| `alto` (defecto en GPU) | 2048² | 12 | 12 | 24 pasos | sí |
-| `medio` | 1024² | 8 | 8 | 16 pasos | sí |
-| `bajo` | 768² | 4 | 6 | 10 pasos | no |
-| `minimo` (defecto en SwiftShader) | 512² | 1 | 4 | 6 pasos | no |
+| Preset | Sombra | Taps | SSAO | Volumétrico | Contacto | Reflejos |
+|---|---|---|---|---|---|---|
+| `ultra` | 2048² | 12 | 16 | 32 pasos | sí | 32 pasos |
+| `alto` (defecto en GPU) | 2048² | 12 | 12 | 24 pasos | sí | 24 pasos |
+| `medio` | 1024² | 8 | 8 | 16 pasos | sí | 16 pasos |
+| `bajo` | 768² | 4 | 6 | 10 pasos | no | no |
+| `minimo` (defecto en SwiftShader) | 512² | 1 | 4 | 6 pasos | no | no |
 
 El preset se elige solo sondeando el renderer real: si detecta rasterizado por
 CPU (SwiftShader, llvmpipe) baja a `minimo`, donde si no serían segundos por

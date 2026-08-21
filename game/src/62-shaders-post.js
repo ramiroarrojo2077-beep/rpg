@@ -187,11 +187,19 @@ uniform sampler2D uScene;
 uniform sampler2D uVolume;
 uniform sampler2D uDepth;
 uniform sampler2D uDepthHalf;
+uniform sampler2D uSSR;
 uniform vec2 uTexelHalf;
+uniform float uSSRStrength;
 layout(location=0) out vec4 oColor;
 void main(){
   vec3 scene = texture(uScene, vUV).rgb;
   float d = texture(uDepth, vUV).r;
+
+  // Reflejos: se suman antes de la niebla, que es donde corresponde.
+  if(uSSRStrength > 0.0){
+    vec4 ssr = texture(uSSR, vUV);
+    scene += ssr.rgb * ssr.a * uSSRStrength;
+  }
 
   // Elige entre los 4 téxeles de baja resolución el de profundidad más cercana,
   // para no sangrar niebla sobre las siluetas.
@@ -209,6 +217,110 @@ void main(){
   }
   vec4 vol = acc / max(bestW, 1e-5);
   oColor = vec4(scene * vol.a + vol.rgb, 1.0);
+}`;
+
+  // ------------------------------------------------- reflejos de pantalla
+  // Marcha del rayo reflejado contra el búfer de profundidad. Es lo que hace
+  // que el blindaje, el visor y el cristal devuelvan el entorno en vez de un
+  // cielo prefiltrado plano. Donde el rayo se escapa de pantalla, el resultado
+  // se desvanece y queda el IBL que ya calculó el pase opaco.
+  const SSR_FS = /* glsl */`
+#include <common>
+in vec2 vUV;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform sampler2D uNormalRough;
+uniform sampler2D uSpecular;
+uniform mat4  uProj;
+uniform mat4  uInvProj;
+uniform mat4  uView;
+uniform vec2  uResolution;
+uniform float uFrame;
+uniform float uMaxRoughness;
+layout(location=0) out vec4 oColor;
+
+vec3 viewFromDepth(vec2 uv, float d){
+  vec4 ndc = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  vec4 v = uInvProj * ndc;
+  return v.xyz / v.w;
+}
+
+#ifndef SSR_STEPS
+#define SSR_STEPS 24
+#endif
+
+void main(){
+  float rough = texture(uNormalRough, vUV).a;
+  vec3 f0 = texture(uSpecular, vUV).rgb;
+  float d = texture(uDepth, vUV).r;
+
+  // Superficies rugosas no devuelven un reflejo nítido: no vale la pena
+  // marchar por ellas, y el ruido resultante sería peor que el IBL.
+  if(d >= 1.0 || rough > uMaxRoughness){ oColor = vec4(0.0); return; }
+
+  vec3 P = viewFromDepth(vUV, d);
+  vec3 Nw = normalize(texture(uNormalRough, vUV).xyz * 2.0 - 1.0);
+  vec3 N = normalize((uView * vec4(Nw, 0.0)).xyz);
+  vec3 V = normalize(P);
+  vec3 R = reflect(V, N);
+
+  // Rayos que vuelven hacia la cámara no tienen nada que muestrear.
+  if(R.z > -0.02){ oColor = vec4(0.0); return; }
+
+  float NoV = saturate(dot(N, -V));
+  // Fresnel de Schlick: el reflejo domina en los ángulos rasantes.
+  vec3 fresnel = f0 + (max(vec3(1.0 - rough), f0) - f0) * pow5(1.0 - NoV);
+
+  float stepLen = 0.35;
+  float jitter = hash12(gl_FragCoord.xy + uFrame * 5.31);
+  vec3 hitColor = vec3(0.0);
+  float hitMask = 0.0;
+
+  vec3 pos = P;
+  for(int i = 0; i < SSR_STEPS; i++){
+    // Paso creciente: cerca hace falta precisión, lejos alcance.
+    pos += R * stepLen * (1.0 + float(i) * 0.22) * (i == 0 ? (0.5 + jitter) : 1.0);
+    vec4 clip = uProj * vec4(pos, 1.0);
+    if(clip.w <= 0.0) break;
+    vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+    if(uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+
+    float sd = texture(uDepth, uv).r;
+    if(sd >= 1.0) continue;
+    vec3 sampleP = viewFromDepth(uv, sd);
+    float diff = sampleP.z - pos.z;
+
+    // Ventana de espesor proporcional al paso: sin ella el rayo atraviesa
+    // superficies finas o se engancha con siluetas lejanas.
+    float thickness = stepLen * (1.0 + float(i) * 0.22) * 2.2 + 0.15;
+    if(diff > 0.0 && diff < thickness){
+      // Refinado binario: sin esto el reflejo queda escalonado.
+      vec3 a = pos - R * stepLen * (1.0 + float(i) * 0.22);
+      vec3 b = pos;
+      for(int k = 0; k < 4; k++){
+        vec3 mid = (a + b) * 0.5;
+        vec4 c2 = uProj * vec4(mid, 1.0);
+        vec2 uv2 = (c2.xy / c2.w) * 0.5 + 0.5;
+        float sd2 = texture(uDepth, uv2).r;
+        vec3 sp2 = viewFromDepth(uv2, sd2);
+        if(sp2.z - mid.z > 0.0) b = mid; else a = mid;
+      }
+      vec4 c3 = uProj * vec4(b, 1.0);
+      uv = (c3.xy / c3.w) * 0.5 + 0.5;
+
+      hitColor = texture(uScene, uv).rgb;
+      // Desvanecido en los bordes de pantalla: si no, el reflejo se corta seco
+      // en cuanto el rayo sale del encuadre.
+      vec2 edge = smoothstep(vec2(0.0), vec2(0.14), uv)
+                * (1.0 - smoothstep(vec2(0.86), vec2(1.0), uv));
+      hitMask = edge.x * edge.y;
+      // Los rayos que apuntan hacia la cámara delatan el truco: se atenúan.
+      hitMask *= saturate(-R.z * 2.2);
+      break;
+    }
+  }
+
+  oColor = vec4(hitColor * fresnel, hitMask * (1.0 - rough / uMaxRoughness));
 }`;
 
   // ------------------------------------------------------------------- bloom
@@ -370,6 +482,8 @@ uniform vec3  uGain;
 uniform float uSaturation;
 uniform float uDamageFlash;
 uniform float uCorruption;   // absorción precursora: aberración del visor
+uniform float uSharpen;
+uniform vec2  uTexel;
 uniform vec2  uResolution;
 layout(location=0) out vec4 oColor;
 
@@ -392,6 +506,24 @@ void main(){
   color.r = texture(uScene, uv + dir * ca * 0.0035).r;
   color.g = texture(uScene, uv).g;
   color.b = texture(uScene, uv - dir * ca * 0.0035).b;
+
+  // Realce de contraste local (contrast-adaptive sharpening). El TAA integra
+  // varios frames y eso ablanda la imagen; esto devuelve el filo sin generar
+  // los halos de un unsharp mask clásico.
+  if(uSharpen > 0.001){
+    vec3 n = texture(uScene, uv + vec2(0.0, -uTexel.y)).rgb;
+    vec3 sS = texture(uScene, uv + vec2(0.0, uTexel.y)).rgb;
+    vec3 e = texture(uScene, uv + vec2(uTexel.x, 0.0)).rgb;
+    vec3 w = texture(uScene, uv + vec2(-uTexel.x, 0.0)).rgb;
+    vec3 mn = min(color, min(min(n, sS), min(e, w)));
+    vec3 mx = max(color, max(max(n, sS), max(e, w)));
+    // El peso se adapta al contraste local: zonas planas no se tocan, así el
+    // ruido del grano y del cielo no se amplifica.
+    vec3 amp = sqrt(saturate(min(mn, 2.0 - mx) / max(mx, 1e-4)));
+    vec3 wgt = -amp * (uSharpen * 0.2);
+    vec3 sum = (n + sS + e + w) * wgt + color;
+    color = max(sum / (1.0 + 4.0 * wgt), vec3(0.0));
+  }
 
   vec3 bloom = texture(uBloom, uv).rgb;
   color += bloom * uBloomStrength;
@@ -429,7 +561,7 @@ void main(){
 }`;
 
   EV.PostShaders = {
-    FS_VS, SSAO_FS, BLUR_FS, VOLUMETRIC_FS, VOL_UPSAMPLE_FS,
+    FS_VS, SSAO_FS, BLUR_FS, VOLUMETRIC_FS, VOL_UPSAMPLE_FS, SSR_FS,
     BLOOM_PREFILTER_FS, DOWNSAMPLE_FS, UPSAMPLE_FS, TAA_FS, COMPOSITE_FS,
   };
 })(window.EV = window.EV || {});

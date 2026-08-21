@@ -200,15 +200,22 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
     // El visor refleja el interior iluminado del casco, no sólo el entorno.
     m.emissive = vec3(0.06, 0.20, 0.32) * (0.7 + 0.3 * uEmissivePulse);
   } else if(sub == 3){                // acento (luces, franjas de identidad)
-    albedo = uAccentColor * 0.16;
-    rough = 0.28; metal = 0.15;
-    m.emissive = uAccentColor * (1.3 + 0.7 * uEmissivePulse);
+    albedo = uAccentColor * 0.10;
+    rough = 0.30; metal = 0.20;
+    m.emissive = uAccentColor * (0.42 + 0.30 * uEmissivePulse);
   } else if(sub == 4){                // goma, juntas, botas
     albedo = uSuitColor * 0.62;
     rough = 0.86; metal = 0.03;
   } else {                            // tejido del traje
     albedo = uSuitColor;
     rough = 0.72; metal = 0.06;
+  }
+
+  // Brillo de borde del tejido: la luz que roza una tela se dispersa entre las
+  // fibras y enciende la silueta. Sin esto el traje lee como plástico mate.
+  if(sub == 0 || sub == 4){
+    float rim = pow(1.0 - saturate(abs(dot(N, normalize(uCamPos - wp)))), 3.5);
+    m.emissive += uSuitColor * rim * 0.55 + vec3(0.10, 0.11, 0.13) * rim * 0.35;
   }
 
   if(sub != 2 && sub != 3){
@@ -221,9 +228,9 @@ MatOut evalMaterial(vec3 wp, vec3 nrm, float extra, float variation){
     // Polvo de Kether: se acumula arriba, no en las caras que miran al suelo.
     float dustMask = saturate(N.y) * uWear;
     float dustNoise = fbm3(wp * 2.6, 2);
-    albedo = mix(albedo, vec3(0.330, 0.215, 0.112), dustMask * (0.35 + 0.45 * dustNoise));
-    rough = mix(rough, 0.94, dustMask * 0.7);
-    metal *= 1.0 - dustMask * 0.75;
+    albedo = mix(albedo, vec3(0.300, 0.208, 0.126), dustMask * (0.14 + 0.22 * dustNoise));
+    rough = mix(rough, 0.90, dustMask * 0.42);
+    metal *= 1.0 - dustMask * 0.38;
   }
 
   m.albedo = albedo;
@@ -299,6 +306,7 @@ in vec4  vPrevClipNoJit;
 
 layout(location=0) out vec4 oNormalRough;
 layout(location=1) out vec2 oVelocity;
+layout(location=2) out vec4 oSpecular;
 
 #include <material>
 
@@ -306,6 +314,9 @@ void main(){
   MatOut m = evalMaterial(vWorld, vNormal, vExtra, vVariation);
   vec3 N = gl_FrontFacing ? m.N : -m.N;
   oNormalRough = vec4(N * 0.5 + 0.5, m.rough);
+  // f0: 4% para dieléctricos, el propio albedo para metales. El pase de
+  // reflejos no puede reconstruirlo sin esto.
+  oSpecular = vec4(mix(vec3(0.04), m.albedo, m.metal), 1.0);
 
   vec2 curr = vClipNoJit.xy / max(vClipNoJit.w, 1e-6);
   vec2 prev = vPrevClipNoJit.xy / max(vPrevClipNoJit.w, 1e-6);

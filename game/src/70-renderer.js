@@ -20,11 +20,11 @@
   // así que bajar calidad recompila más barato en vez de ramificar en runtime.
   const MAX_LIGHTS = 8;
   const PRESETS = {
-    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2, contact: 1 },
-    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2, contact: 1 },
-    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2, contact: 1 },
-    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4, contact: 0 },
-    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4, contact: 0 },
+    ultra:  { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 16, volSteps: 32, aoScale: 2, contact: 1, ssr: 32 },
+    alto:   { shadowRes: 2048, shadowTaps: 12, ssaoSamples: 12, volSteps: 24, aoScale: 2, contact: 1, ssr: 24 },
+    medio:  { shadowRes: 1024, shadowTaps:  8, ssaoSamples:  8, volSteps: 16, aoScale: 2, contact: 1, ssr: 16 },
+    bajo:   { shadowRes:  768, shadowTaps:  4, ssaoSamples:  6, volSteps: 10, aoScale: 4, contact: 0, ssr: 0 },
+    minimo: { shadowRes:  512, shadowTaps:  1, ssaoSamples:  4, volSteps:  6, aoScale: 4, contact: 0, ssr: 0 },
   };
 
   // Secuencia de Halton para el jitter subpíxel del TAA.
@@ -67,6 +67,7 @@ void main(){
       SSAO_SAMPLES: Q.ssaoSamples,
       VOL_STEPS: Q.volSteps,
       MAX_LIGHTS: MAX_LIGHTS,
+      SSR_STEPS: Math.max(Q.ssr, 1),
     };
     const mk = (vs, fs, label, def) => G.program(vs, fs, label, Object.assign({}, COST, def || {}));
     const prog = {
@@ -95,6 +96,7 @@ void main(){
       bloomPre: mk(PS.FS_VS, PS.BLOOM_PREFILTER_FS, 'bloomPrefilter'),
       down: mk(PS.FS_VS, PS.DOWNSAMPLE_FS, 'downsample'),
       up: mk(PS.FS_VS, PS.UPSAMPLE_FS, 'upsample'),
+      ssr: mk(PS.FS_VS, PS.SSR_FS, 'ssr'),
       taa: mk(PS.FS_VS, PS.TAA_FS, 'taa'),
       composite: mk(PS.FS_VS, PS.COMPOSITE_FS, 'composite'),
     };
@@ -134,7 +136,8 @@ void main(){
       const R16 = { internalFormat: gl.R16F, format: gl.RED, type: gl.HALF_FLOAT };
       const R32 = { internalFormat: gl.R32F, format: gl.RED, type: gl.FLOAT };
 
-      fb.prepass = G.framebuffer(W, H, [F16, RG16], 'texture');
+      const RGBA8 = { internalFormat: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
+      fb.prepass = G.framebuffer(W, H, [F16, RG16, RGBA8], 'texture');
 
       // El pase opaco comparte la profundidad del prepase (early-Z exacto).
       fb.scene = (() => {
@@ -155,6 +158,9 @@ void main(){
       fb.aoBlur = G.framebuffer(halfW, halfH, [R16], null);
       fb.depthHalf = G.framebuffer(halfW, halfH, [R32], null);
       fb.volume = G.framebuffer(halfW, halfH, [F16], null);
+      // Los reflejos van a media resolución: son de baja frecuencia y el TAA
+      // termina de integrarlos.
+      fb.ssr = G.framebuffer(halfW, halfH, [F16], null);
       fb.composed = G.framebuffer(W, H, [F16], null);
       fb.taa = [G.framebuffer(W, H, [F16], null), G.framebuffer(W, H, [F16], null)];
 
@@ -384,7 +390,7 @@ void main(){
 
       // ---------------------------------------------------------- 2. prepase
       G.bindFB(fb.prepass);
-      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
       gl.clearColor(0.5, 0.5, 1.0, 1.0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.depthFunc(gl.LESS);
@@ -531,9 +537,27 @@ void main(){
         gl.depthMask(false);
       }
 
-      // ------------------------------------------------------ 5. volumétricos
+      // ------------------------------------------------------- 5. reflejos
       gl.disable(gl.DEPTH_TEST);
       gl.depthMask(false);
+
+      if (Q.ssr > 0) {
+        G.bindFB(fb.ssr);
+        gl.useProgram(prog.ssr.prog);
+        U.tex(prog.ssr, 'uScene', 0, fb.scene.tex);
+        U.tex(prog.ssr, 'uDepth', 1, fb.prepass.depthTex);
+        U.tex(prog.ssr, 'uNormalRough', 2, fb.prepass.textures[0]);
+        U.tex(prog.ssr, 'uSpecular', 3, fb.prepass.textures[2]);
+        U.m4(prog.ssr, 'uProj', projNoJit);
+        U.m4(prog.ssr, 'uInvProj', invProj);
+        U.m4(prog.ssr, 'uView', view);
+        U.v2(prog.ssr, 'uResolution', halfW, halfH);
+        U.f(prog.ssr, 'uFrame', frame % 64);
+        U.f(prog.ssr, 'uMaxRoughness', 0.45);
+        G.fullscreen();
+      }
+
+      // ------------------------------------------------------ 6. volumétricos
 
       G.bindFB(fb.volume);
       gl.useProgram(prog.volumetric.prog);
@@ -560,10 +584,12 @@ void main(){
       U.tex(prog.volUpsample, 'uVolume', 1, fb.volume.tex);
       U.tex(prog.volUpsample, 'uDepth', 2, fb.prepass.depthTex);
       U.tex(prog.volUpsample, 'uDepthHalf', 3, fb.depthHalf.tex);
+      U.tex(prog.volUpsample, 'uSSR', 4, fb.ssr.tex);
+      U.f(prog.volUpsample, 'uSSRStrength', Q.ssr > 0 ? (scene.ssrStrength || 1.0) : 0.0);
       U.v2(prog.volUpsample, 'uTexelHalf', 1 / halfW, 1 / halfH);
       G.fullscreen();
 
-      // --------------------------------------------------------------- 6. TAA
+      // --------------------------------------------------------------- 7. TAA
       const cur = fb.taa[historyIndex];
       const hist = fb.taa[1 - historyIndex];
       G.bindFB(cur);
@@ -579,7 +605,7 @@ void main(){
       historyIndex = 1 - historyIndex;
       needsHistoryReset = false;
 
-      // ------------------------------------------------------------- 7. bloom
+      // ------------------------------------------------------------- 8. bloom
       G.bindFB(fb.bloom[0]);
       gl.useProgram(prog.bloomPre.prog);
       U.tex(prog.bloomPre, 'uTex', 0, cur.tex);
@@ -607,7 +633,7 @@ void main(){
         prevUp = fb.bloomUp[i];
       }
 
-      // ------------------------------------------------- 8. cadena de cámara
+      // ------------------------------------------------- 9. cadena de cámara
       G.bindFB(null, W, H);
       gl.useProgram(prog.composite.prog);
       U.tex(prog.composite, 'uScene', 0, cur.tex);
@@ -625,6 +651,8 @@ void main(){
       U.f(prog.composite, 'uSaturation', scene.grade.saturation);
       U.f(prog.composite, 'uDamageFlash', scene.damageFlash || 0);
       U.f(prog.composite, 'uCorruption', scene.corruption || 0);
+      U.f(prog.composite, 'uSharpen', scene.sharpen === undefined ? 0.42 : scene.sharpen);
+      U.v2(prog.composite, 'uTexel', 1 / W, 1 / H);
       U.v2(prog.composite, 'uResolution', W, H);
       G.fullscreen();
 

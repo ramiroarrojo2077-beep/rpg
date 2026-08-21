@@ -61,145 +61,239 @@
     const S = STYLES[style] || STYLES.engineer;
     const b = CM.builder(sk);
     const k = S.bulk;
+    const heavy = S.armor === 'heavy';
 
     // --- torso: sección elíptica, más ancha que profunda
     b.limb('root', 'spine', {
-      rx0: 0.155 * k, rz0: 0.115 * k, rx1: 0.165 * k, rz1: 0.120 * k,
-      seg: 16, rings: 3, material: CM.MAT_SUIT, parentBlend: 0, childBlend: 0.4,
+      rx0: 0.152 * k, rz0: 0.113 * k, rx1: 0.164 * k, rz1: 0.119 * k,
+      seg: 20, rings: 4, material: CM.MAT_SUIT, parentBlend: 0, childBlend: 0.4,
     });
     b.limb('spine', 'chest', {
-      rx0: 0.165 * k, rz0: 0.120 * k, rx1: 0.195 * k, rz1: 0.135 * k,
-      seg: 16, rings: 4, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.35,
+      rx0: 0.164 * k, rz0: 0.119 * k, rx1: 0.196 * k, rz1: 0.136 * k,
+      seg: 20, rings: 5, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.35,
     });
     b.limb('chest', 'neck', {
-      rx0: 0.195 * k, rz0: 0.135 * k, rx1: 0.085 * k, rz1: 0.085 * k,
-      seg: 16, rings: 4, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.3,
+      rx0: 0.196 * k, rz0: 0.136 * k, rx1: 0.083 * k, rz1: 0.083 * k,
+      seg: 20, rings: 5, material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.3,
+    });
+    // Gorguera: el anillo rígido donde se acopla el casco.
+    b.limb('neck', 'head', {
+      rx0: 0.092 * k, rz0: 0.092 * k, rx1: 0.076 * k, rz1: 0.076 * k,
+      seg: 16, rings: 2, material: CM.MAT_ARMOR, parentBlend: 0.3, childBlend: 0.2,
+      offsetA: [0, -0.012, 0],
     });
     b.limb('neck', 'head', {
-      rx0: 0.062 * k, rz0: 0.062 * k, rx1: 0.072 * k, rz1: 0.072 * k,
-      seg: 12, rings: 2, material: CM.MAT_RUBBER, parentBlend: 0.3, childBlend: 0.4,
+      rx0: 0.062 * k, rz0: 0.062 * k, rx1: 0.070 * k, rz1: 0.070 * k,
+      seg: 14, rings: 2, material: CM.MAT_RUBBER, parentBlend: 0.3, childBlend: 0.4,
     });
 
     // --- cabeza y casco
     if (S.visor === 'none') {
-      b.blob('head', { r: 0.098 * k, ry: 0.115 * k, rz: 0.108 * k, offset: [0, 0.045, 0],
-        seg: 16, rings: 12, material: CM.MAT_RUBBER });
-      b.blob('head', { r: 0.030, offset: [0, 0.055, -0.095 * k], seg: 8, rings: 6,
-        material: CM.MAT_ACCENT });   // respirador
+      b.blob('head', { r: 0.098 * k, ry: 0.116 * k, rz: 0.109 * k, offset: [0, 0.045, 0],
+        seg: 20, rings: 14, material: CM.MAT_RUBBER });
+      b.blob('head', { r: 0.032, offset: [0, 0.050, -0.098 * k], seg: 10, rings: 8,
+        material: CM.MAT_ACCENT });
+      // Mandíbula del respirador, para que no sea una pelota lisa.
+      b.plate('head', { size: [0.086, 0.052, 0.060], offset: [0, 0.010, -0.078 * k],
+        rot: [0.25, 0, 0], bevel: 0.008, material: CM.MAT_RUBBER });
     } else {
-      b.blob('head', { r: 0.118 * k, ry: 0.128 * k, rz: 0.126 * k, offset: [0, 0.050, 0],
-        seg: 18, rings: 14, material: CM.MAT_ARMOR });
       const wide = S.visor === 'wide';
+      // Cráneo del casco
+      b.blob('head', { r: 0.118 * k, ry: 0.126 * k, rz: 0.124 * k, offset: [0, 0.052, 0],
+        seg: 22, rings: 16, material: CM.MAT_ARMOR });
+      // Mentonera: separa el casco en dos volúmenes y define el perfil.
+      b.plate('head', { size: [0.150 * k, 0.070, 0.115 * k], offset: [0, -0.028, -0.048 * k],
+        rot: [0.16, 0, 0], bevel: 0.012, material: CM.MAT_ARMOR });
+      // Marco del visor, y el visor hundido dentro
       b.plate('head', {
-        size: [wide ? 0.165 : 0.130, 0.070, 0.045], offset: [0, 0.055, -0.105 * k],
-        rot: [-0.18, 0, 0], bevel: 0.010, material: CM.MAT_VISOR,
+        size: [(wide ? 0.186 : 0.152) * k, 0.092, 0.052], offset: [0, 0.054, -0.098 * k],
+        rot: [-0.18, 0, 0], bevel: 0.014, material: CM.MAT_ARMOR,
+      });
+      b.plate('head', {
+        size: [(wide ? 0.160 : 0.126) * k, 0.062, 0.044], offset: [0, 0.055, -0.112 * k],
+        rot: [-0.18, 0, 0], bevel: 0.008, material: CM.MAT_VISOR,
       });
       if (S.brow) {
-        b.plate('head', { size: [0.185, 0.032, 0.10], offset: [0, 0.128, -0.030],
+        b.plate('head', { size: [0.196 * k, 0.034, 0.104], offset: [0, 0.130, -0.034],
           rot: [0.22, 0, 0], bevel: 0.008, material: CM.MAT_ARMOR });
       }
-      // Luz de casco: pequeña, emisiva, con acento del personaje.
-      b.blob('head', { r: 0.022, offset: [0.075 * k, 0.115, -0.070], seg: 8, rings: 6,
+      // Respiraderos laterales y luz de casco
+      for (const sx of [-1, 1]) {
+        b.plate('head', { size: [0.030, 0.062, 0.070], offset: [sx * 0.112 * k, 0.028, -0.030],
+          rot: [0, 0, sx * 0.12], bevel: 0.006, material: CM.MAT_RUBBER });
+      }
+      b.blob('head', { r: 0.024, offset: [0.078 * k, 0.118, -0.072], seg: 10, rings: 8,
         material: CM.MAT_ACCENT });
+      b.blob('head', { r: 0.013, offset: [-0.082 * k, 0.120, -0.062], seg: 8, rings: 6,
+        material: CM.MAT_ACCENT });
+      // Cresta: canaliza el cableado del casco y da silueta reconocible.
+      b.plate('head', { size: [0.030, 0.040, 0.180 * k], offset: [0, 0.150 * k, 0.010],
+        rot: [0.06, 0, 0], bevel: 0.007, material: CM.MAT_RUBBER });
     }
 
     // --- brazos
     for (const side of ['L', 'R']) {
-      const s = side === 'L' ? 1 : -1;
+      const s2 = side === 'L' ? 1 : -1;
       b.limb('clav' + side, 'arm' + side, {
-        rx0: 0.075 * k, rx1: 0.070 * k, seg: 10, rings: 2,
+        rx0: 0.076 * k, rx1: 0.070 * k, seg: 14, rings: 3,
         material: CM.MAT_SUIT, parentBlend: 0.2, childBlend: 0.5,
       });
-      b.blob('arm' + side, { r: 0.083 * k, seg: 12, rings: 9, material: CM.MAT_SUIT,
+      b.blob('arm' + side, { r: 0.084 * k, seg: 16, rings: 12, material: CM.MAT_SUIT,
         weightWith: 'chest', weightAmount: 0.25 });
       b.limb('arm' + side, 'fore' + side, {
-        rx0: 0.072 * k, rx1: 0.058 * k, seg: 12, rings: 5, bulge: 0.14,
+        rx0: 0.073 * k, rx1: 0.058 * k, seg: 16, rings: 7, bulge: 0.15,
         material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.45,
       });
-      b.blob('fore' + side, { r: 0.058 * k, seg: 10, rings: 8, material: CM.MAT_RUBBER });
+      // Codera
+      b.blob('fore' + side, { r: 0.060 * k, seg: 14, rings: 10, material: CM.MAT_RUBBER });
+      b.plate('fore' + side, { size: [0.086, 0.070, 0.086], offset: [0, 0.014, 0.030],
+        bevel: 0.010, material: CM.MAT_ARMOR, weightWith: 'arm' + side, weightAmount: 0.3 });
+
       b.limb('fore' + side, 'hand' + side, {
-        rx0: 0.056 * k, rx1: 0.046 * k, seg: 12, rings: 4, bulge: 0.10,
+        rx0: 0.056 * k, rx1: 0.046 * k, seg: 16, rings: 5, bulge: 0.10,
         material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.4,
       });
-      b.blob('hand' + side, { r: 0.050 * k, ry: 0.062 * k, rz: 0.038 * k,
-        offset: [0, -0.035, 0], seg: 10, rings: 8, material: CM.MAT_RUBBER });
-      // Antebrazo con panel: donde vive el HUD diegético del traje.
+      // Mano: palma más el bloque del pulgar, para que lea como mano.
+      b.blob('hand' + side, { r: 0.050 * k, ry: 0.064 * k, rz: 0.036 * k,
+        offset: [0, -0.036, 0], seg: 14, rings: 10, material: CM.MAT_RUBBER });
+      b.plate('hand' + side, { size: [0.030, 0.052, 0.030],
+        offset: [s2 * 0.042 * k, -0.026, -0.006], rot: [0, 0, -s2 * 0.5],
+        bevel: 0.006, material: CM.MAT_RUBBER });
+      b.plate('hand' + side, { size: [0.062 * k, 0.030, 0.044],
+        offset: [0, -0.002, -0.004], bevel: 0.006, material: CM.MAT_ARMOR });
+
+      // Panel de antebrazo (izquierda = HUD del traje) y correas
       b.plate('fore' + side, {
-        size: [0.062, 0.115, 0.048], offset: [s * 0.026, -0.115, -0.012],
-        bevel: 0.007, material: side === 'L' ? CM.MAT_ACCENT : CM.MAT_ARMOR,
+        size: [0.066, 0.120, 0.050], offset: [s2 * 0.026, -0.118, -0.012],
+        bevel: 0.007, material: CM.MAT_ARMOR,
+      });
+      if (side === 'L') {
+        // Pantalla del traje: pequeña y encendida, no un panel pintado entero.
+        b.plate('foreL', {
+          size: [0.040, 0.052, 0.014], offset: [0.052 * k, -0.118, -0.012],
+          bevel: 0.003, material: CM.MAT_ACCENT,
+        });
+      }
+      b.plate('fore' + side, {
+        size: [0.076, 0.024, 0.076], offset: [0, -0.062, 0],
+        bevel: 0.005, material: CM.MAT_RUBBER,
       });
       if (S.pauldrons) {
+        // Hombrera en dos placas: una cubre, la otra articula.
         b.plate('arm' + side, {
-          size: [0.135 * k, 0.085, 0.145 * k], offset: [s * 0.028, 0.030, 0],
-          rot: [0, 0, -s * 0.28], bevel: 0.014, material: CM.MAT_ARMOR,
+          size: [0.140 * k, 0.086, 0.150 * k], offset: [s2 * 0.030, 0.034, 0],
+          rot: [0, 0, -s2 * 0.28], bevel: 0.014, material: CM.MAT_ARMOR,
           weightWith: 'chest', weightAmount: 0.2,
+        });
+        b.plate('arm' + side, {
+          size: [0.116 * k, 0.052, 0.126 * k], offset: [s2 * 0.046, -0.042, 0],
+          rot: [0, 0, -s2 * 0.42], bevel: 0.010, material: CM.MAT_ARMOR,
         });
       }
     }
 
     // --- piernas
     for (const side of ['L', 'R']) {
-      const s = side === 'L' ? 1 : -1;
-      b.blob('thigh' + side, { r: 0.105 * k, seg: 12, rings: 9, material: CM.MAT_SUIT,
+      const s2 = side === 'L' ? 1 : -1;
+      b.blob('thigh' + side, { r: 0.106 * k, seg: 16, rings: 12, material: CM.MAT_SUIT,
         weightWith: 'root', weightAmount: 0.3 });
       b.limb('thigh' + side, 'shin' + side, {
-        rx0: 0.105 * k, rz0: 0.100 * k, rx1: 0.078 * k, rz1: 0.078 * k,
-        seg: 12, rings: 5, bulge: 0.10,
+        rx0: 0.106 * k, rz0: 0.101 * k, rx1: 0.078 * k, rz1: 0.078 * k,
+        seg: 16, rings: 7, bulge: 0.11,
         material: CM.MAT_SUIT, parentBlend: 0.40, childBlend: 0.45,
       });
-      b.blob('shin' + side, { r: 0.080 * k, seg: 12, rings: 9, material: CM.MAT_RUBBER });
+      // Rodillera
+      b.blob('shin' + side, { r: 0.081 * k, seg: 14, rings: 10, material: CM.MAT_RUBBER });
+      b.plate('shin' + side, { size: [0.112, 0.098, 0.086], offset: [0, 0.010, -0.038],
+        rot: [0.2, 0, 0], bevel: 0.011, material: CM.MAT_ARMOR,
+        weightWith: 'thigh' + side, weightAmount: 0.3 });
+
       b.limb('shin' + side, 'foot' + side, {
-        rx0: 0.078 * k, rx1: 0.058 * k, seg: 12, rings: 5, bulge: 0.12,
+        rx0: 0.078 * k, rx1: 0.058 * k, seg: 16, rings: 7, bulge: 0.13,
         material: CM.MAT_SUIT, parentBlend: 0.35, childBlend: 0.45,
       });
-      // Bota: suela gruesa, es lo que apoya en la arena.
+      // Bota: caña, suela y puntera reforzada.
       b.plate('foot' + side, {
-        size: [0.105 * k, 0.075, 0.255 * k], offset: [0, -0.035, -0.045],
+        size: [0.106 * k, 0.078, 0.258 * k], offset: [0, -0.034, -0.046],
         bevel: 0.012, material: CM.MAT_RUBBER,
       });
       b.plate('foot' + side, {
-        size: [0.112 * k, 0.030, 0.265 * k], offset: [0, -0.072, -0.045],
+        size: [0.114 * k, 0.032, 0.268 * k], offset: [0, -0.074, -0.046],
         bevel: 0.010, material: CM.MAT_ARMOR,
       });
-      if (S.armor === 'heavy') {
+      b.plate('foot' + side, {
+        size: [0.098 * k, 0.048, 0.056], offset: [0, -0.030, -0.158 * k],
+        rot: [-0.18, 0, 0], bevel: 0.008, material: CM.MAT_ARMOR,
+      });
+      if (heavy) {
         b.plate('thigh' + side, {
-          size: [0.115, 0.180, 0.075], offset: [s * 0.038, -0.170, -0.055],
+          size: [0.118, 0.184, 0.078], offset: [s2 * 0.038, -0.172, -0.056],
           rot: [0.10, 0, 0], bevel: 0.011, material: CM.MAT_ARMOR,
         });
         b.plate('shin' + side, {
-          size: [0.105, 0.220, 0.070], offset: [0, -0.185, -0.052],
+          size: [0.106, 0.222, 0.072], offset: [0, -0.188, -0.052],
           rot: [-0.05, 0, 0], bevel: 0.011, material: CM.MAT_ARMOR,
         });
       }
+      // Cartuchera en el muslo exterior
+      b.plate('thigh' + side, {
+        size: [0.062, 0.104, 0.058], offset: [s2 * 0.106 * k, -0.150, 0.010],
+        rot: [0, 0, -s2 * 0.10], bevel: 0.008, material: CM.MAT_RUBBER,
+      });
     }
 
     // --- coraza y accesorios
-    if (S.armor === 'heavy') {
-      b.plate('chest', { size: [0.335 * k, 0.245, 0.115], offset: [0, 0.045, -0.075],
+    if (heavy) {
+      b.plate('chest', { size: [0.338 * k, 0.250, 0.118], offset: [0, 0.046, -0.076],
         rot: [0.06, 0, 0], bevel: 0.016, material: CM.MAT_ARMOR });
-      b.plate('chest', { size: [0.115, 0.075, 0.045], offset: [0, 0.115, -0.135],
-        bevel: 0.008, material: CM.MAT_ACCENT });   // luz de pecho
-      b.plate('spine', { size: [0.290, 0.185, 0.085], offset: [0, 0.030, 0.078],
+      // Placas del abdomen: tres bandas escalonadas.
+      for (let i = 0; i < 3; i++) {
+        b.plate('spine', { size: [0.250 - i * 0.020, 0.062, 0.090],
+          offset: [0, 0.060 - i * 0.070, -0.086], rot: [0.10 + i * 0.05, 0, 0],
+          bevel: 0.008, material: CM.MAT_ARMOR, weightWith: 'root', weightAmount: 0.35 });
+      }
+      b.plate('chest', { size: [0.118, 0.078, 0.046], offset: [0, 0.118, -0.138],
+        bevel: 0.008, material: CM.MAT_ACCENT });
+      b.plate('spine', { size: [0.294, 0.188, 0.088], offset: [0, 0.030, 0.078],
         rot: [-0.05, 0, 0], bevel: 0.014, material: CM.MAT_ARMOR });
     } else {
-      b.plate('chest', { size: [0.260 * k, 0.150, 0.085], offset: [0, 0.015, -0.088],
+      b.plate('chest', { size: [0.264 * k, 0.154, 0.088], offset: [0, 0.016, -0.088],
         rot: [0.05, 0, 0], bevel: 0.012, material: CM.MAT_ARMOR });
-      b.plate('chest', { size: [0.085, 0.055, 0.035], offset: [0, 0.075, -0.128],
+      b.plate('chest', { size: [0.088, 0.058, 0.036], offset: [0, 0.076, -0.128],
         bevel: 0.006, material: CM.MAT_ACCENT });
+      b.plate('spine', { size: [0.212, 0.130, 0.070], offset: [0, 0.036, 0.070],
+        bevel: 0.010, material: CM.MAT_ARMOR });
     }
-    // Cinturón: separa torso de piernas y da lectura de silueta.
+
+    // Correas cruzadas del arnés: rompen la coraza y leen a distancia.
+    for (const sx of [-1, 1]) {
+      b.plate('chest', {
+        size: [0.046, 0.290, 0.034], offset: [sx * 0.086 * k, 0.030, -0.118],
+        rot: [0.05, 0, sx * 0.20], bevel: 0.005, material: CM.MAT_RUBBER,
+      });
+    }
+
+    // Cinturón, con hebilla
     b.limb('root', 'spine', {
-      rx0: 0.168 * k, rz0: 0.128 * k, rx1: 0.168 * k, rz1: 0.128 * k,
-      seg: 16, rings: 1, material: CM.MAT_RUBBER, parentBlend: 0, childBlend: 0,
+      rx0: 0.170 * k, rz0: 0.130 * k, rx1: 0.170 * k, rz1: 0.130 * k,
+      seg: 20, rings: 1, material: CM.MAT_RUBBER, parentBlend: 0, childBlend: 0,
       offsetB: [0, -0.115, 0],
     });
+    b.plate('root', { size: [0.086, 0.060, 0.040], offset: [0, 0.048, -0.126 * k],
+      bevel: 0.006, material: CM.MAT_ARMOR });
+
     if (S.pack) {
-      b.plate('chest', { size: [0.245, 0.320, 0.135], offset: [0, -0.010, 0.150],
+      b.plate('chest', { size: [0.248, 0.324, 0.138], offset: [0, -0.010, 0.152],
         bevel: 0.016, material: CM.MAT_ARMOR });
-      b.plate('chest', { size: [0.070, 0.130, 0.055], offset: [0.085, 0.120, 0.215],
-        bevel: 0.008, material: CM.MAT_RUBBER });
-      b.plate('chest', { size: [0.070, 0.130, 0.055], offset: [-0.085, 0.120, 0.215],
-        bevel: 0.008, material: CM.MAT_RUBBER });
+      // Tanques gemelos y manguera
+      for (const sx of [-1, 1]) {
+        b.plate('chest', { size: [0.072, 0.134, 0.058], offset: [sx * 0.086, 0.120, 0.218],
+          bevel: 0.008, material: CM.MAT_RUBBER });
+        b.plate('chest', { size: [0.026, 0.026, 0.026], offset: [sx * 0.086, 0.202, 0.208],
+          bevel: 0.004, material: CM.MAT_ACCENT });
+      }
+      b.plate('chest', { size: [0.180, 0.036, 0.040], offset: [0, -0.140, 0.196],
+        bevel: 0.006, material: CM.MAT_RUBBER });
     }
 
     return b;
@@ -540,10 +634,10 @@
 
   // Paletas: cada personaje se reconoce a distancia por su acento.
   const PALETTES = {
-    engineer: { suit: [0.088, 0.086, 0.082], armor: [0.315, 0.300, 0.272], accent: [1.05, 0.42, 0.10] },
-    soldier: { suit: [0.070, 0.074, 0.078], armor: [0.245, 0.255, 0.268], accent: [0.20, 0.62, 1.15] },
-    technician: { suit: [0.095, 0.090, 0.078], armor: [0.360, 0.335, 0.280], accent: [1.20, 0.95, 0.22] },
-    wounded: { suit: [0.082, 0.078, 0.076], armor: [0.290, 0.275, 0.262], accent: [0.95, 0.20, 0.16] },
+    engineer: { suit: [0.052, 0.058, 0.064], armor: [0.148, 0.166, 0.180], accent: [1.05, 0.44, 0.12] },
+    soldier: { suit: [0.044, 0.050, 0.058], armor: [0.108, 0.126, 0.150], accent: [0.22, 0.60, 1.10] },
+    technician: { suit: [0.062, 0.066, 0.062], armor: [0.190, 0.196, 0.176], accent: [1.10, 0.86, 0.24] },
+    wounded: { suit: [0.050, 0.054, 0.058], armor: [0.128, 0.138, 0.148], accent: [0.92, 0.22, 0.18] },
   };
 
   function create(style, opts = {}) {

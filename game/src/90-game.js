@@ -91,7 +91,7 @@
       pos: [player.pos[0], player.pos[1], player.pos[2]],
       yaw: player.yaw, name: 'jugador', clip: 'idle',
     });
-    avatar.wear = 0.35;
+    avatar.wear = 0.28;
 
     const npcs = SURVIVORS.map((s, i) => {
       const x = spawn[0] + s.offset[0];
@@ -101,7 +101,7 @@
         yaw: s.yaw, clip: s.clip, name: s.name,
         offset: i * 1.7,   // desfasa los ciclos: nadie respira sincronizado
       });
-      c.wear = 0.55 + i * 0.08;
+      c.wear = 0.34 + i * 0.06;
       c.spec = s;
       c.greeted = false;
       c.baseClip = s.clip;

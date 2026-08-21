@@ -31,11 +31,9 @@
     app.appendChild(hudCanvas);
 
     const overlay = document.createElement('div');
-    overlay.style.cssText =
-      'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
-      'flex-direction:column;gap:18px;background:rgba(5,6,9,0.92);color:#e8e2d6;' +
-      'font-family:ui-monospace,Menlo,Consolas,monospace;text-align:center;cursor:pointer;' +
-      'transition:opacity .5s;z-index:10;padding:24px;';
+    overlay.id = 'overlay';
+    overlay.setAttribute('role', 'button');
+    overlay.setAttribute('tabindex', '0');
     app.appendChild(overlay);
 
     // --- calidad -------------------------------------------------------------
@@ -56,9 +54,14 @@
       renderer = EV.Renderer.create(glCanvas, quality);
     } catch (e) {
       overlay.innerHTML =
-        '<div style="font-size:19px;letter-spacing:2px">ECOS DEL VACÍO</div>' +
-        '<div style="opacity:.6;max-width:520px;line-height:1.7;font-size:13px">' +
-        'Este navegador no pudo inicializar WebGL 2.<br>' + String(e && e.message || e) + '</div>';
+        '<div class="ov-inner">' +
+        '<p class="ov-eyebrow">Sin señal</p>' +
+        '<h1 class="ov-title">Ecos del <em>Vacío</em></h1>' +
+        '<p class="ov-note">Este navegador no pudo inicializar <strong>WebGL 2</strong>, ' +
+        'que es lo que dibuja el planeta. Probá con Chrome, Firefox o Safari 15+ ' +
+        'en un equipo con aceleración por hardware.</p>' +
+        '<p class="ov-meta">' + String(e && e.message || e) + '</p>' +
+        '</div>';
       window.EV_ERROR = String(e && e.message || e);
       return;
     }
@@ -110,6 +113,13 @@
     let pointerLocked = false;
     let paused = false;
     let photoMode = false;
+    // En un iframe embebido el bloqueo de puntero suele estar denegado por la
+    // política de permisos. Sin alternativa, el ratón no giraría la cámara y el
+    // juego sería injugable, así que hay un modo de arrastre equivalente.
+    let dragLook = false;
+    let dragging = false;
+    let dragMoved = 0;
+    let dragStart = 0;
 
     const SENS = 0.0022;
 
@@ -130,29 +140,64 @@
           if (d < 16) game.deployAntenna();
         }
       }
+      if (e.code === 'KeyJ') keys.Fire = true;
       if (e.code === 'Space') { input.jumpPressed = true; e.preventDefault(); }
       if (e.code === 'ControlLeft' || e.code === 'ControlRight') input.dashPressed = true;
       if (e.code === 'Escape') { paused = true; document.exitPointerLock(); }
     });
-    window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+    window.addEventListener('keyup', (e) => {
+      keys[e.code] = false;
+      if (e.code === 'KeyJ') keys.Fire = false;
+    });
+    let fireOnce = false;
 
     glCanvas.addEventListener('mousedown', (e) => {
-      if (!pointerLocked) return;
-      if (e.button === 0) keys.Fire = true;
-      if (e.button === 2) input.dashPressed = true;
+      if (e.button === 2) { input.dashPressed = true; e.preventDefault(); return; }
+      if (e.button !== 0) return;
+      if (pointerLocked) { keys.Fire = true; return; }
+      if (dragLook && started && !paused) {
+        // Sin bloqueo de puntero: arrastrar mira, y un clic corto sin
+        // desplazamiento cuenta como disparo.
+        dragging = true;
+        dragMoved = 0;
+        dragStart = performance.now();
+        e.preventDefault();
+      }
     });
-    window.addEventListener('mouseup', (e) => { if (e.button === 0) keys.Fire = false; });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button !== 0) return;
+      if (pointerLocked) { keys.Fire = false; return; }
+      if (dragging) {
+        dragging = false;
+        const quick = performance.now() - dragStart < 260;
+        if (quick && dragMoved < 6) fireOnce = true;
+      }
+    });
     glCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     document.addEventListener('mousemove', (e) => {
-      if (!pointerLocked) return;
-      input.lookX += e.movementX * SENS;
-      input.lookY += e.movementY * SENS;
+      if (pointerLocked) {
+        input.lookX += e.movementX * SENS;
+        input.lookY += e.movementY * SENS;
+      } else if (dragging) {
+        dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
+        input.lookX += e.movementX * SENS;
+        input.lookY += e.movementY * SENS;
+      }
     });
     document.addEventListener('pointerlockchange', () => {
       pointerLocked = document.pointerLockElement === glCanvas;
-      if (!pointerLocked && started) { paused = true; showPause(); }
+      if (pointerLocked) dragLook = false;
+      else if (started && !dragLook) { paused = true; showPause(); }
     });
+    document.addEventListener('pointerlockerror', () => { enableDragLook(); });
+
+    function enableDragLook() {
+      if (dragLook) return;
+      dragLook = true;
+      pointerLocked = false;
+      hud.say('Sin bloqueo de puntero: arrastrá para mirar, clic corto para disparar.', 7);
+    }
 
     function readKeys() {
       input.moveZ = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
@@ -240,42 +285,69 @@
 
     // --- pantallas -----------------------------------------------------------
     let started = false;
+    const KEY_ROWS = '<div class=\"ov-key\"><dt><kbd>W A S D</kbd></dt><dd>Moverse</dd></div><div class=\"ov-key\"><dt><kbd>ratón</kbd></dt><dd>Mirar</dd></div><div class=\"ov-key\"><dt><kbd>Shift</kbd></dt><dd>Correr · sostenerse</dd></div><div class=\"ov-key\"><dt><kbd>Ctrl</kbd></dt><dd>Esquivar</dd></div><div class=\"ov-key\"><dt><kbd>Espacio</kbd></dt><dd>Saltar · propulsor</dd></div><div class=\"ov-key\"><dt><kbd>clic · J</kbd></dt><dd>Disparar</dd></div><div class=\"ov-key\"><dt><kbd>E</kbd></dt><dd>Gancho · interactuar</dd></div><div class=\"ov-key\"><dt><kbd>F</kbd></dt><dd>Fractura</dd></div>';
+
     function showTitle() {
       overlay.innerHTML =
-        '<div style="font-size:11px;letter-spacing:7px;opacity:.5">KETHER-3 · EXPEDICIÓN MERIDIANO</div>' +
-        '<div style="font-size:38px;letter-spacing:9px;font-weight:300">ECOS DEL VACÍO</div>' +
-        '<div style="opacity:.55;max-width:560px;line-height:1.85;font-size:12.5px">' +
-        'WASD moverse · ratón mirar · <b>Shift</b> correr / sostenerse · <b>Ctrl</b> o clic derecho esquivar<br>' +
-        '<b>Espacio</b> saltar (mantener: propulsor) · <b>clic izq.</b> disparar · <b>E</b> gancho / interactuar<br>' +
-        '<b>R</b> recargar · <b>F</b> Fractura · <b>H</b> HUD extendido · <b>P</b> modo foto · <b>Esc</b> pausa' +
-        '</div>' +
-        '<div style="margin-top:10px;padding:11px 26px;border:1px solid rgba(232,226,214,.32);' +
-        'letter-spacing:3px;font-size:13px">CLIC PARA DESPERTAR</div>' +
-        '<div style="opacity:.32;font-size:10.5px;letter-spacing:1px;margin-top:4px">calidad: ' +
-        quality + ' · ' + String(renderer.info.renderer).slice(0, 64) + '</div>';
+        '<div class="ov-inner">' +
+        '<p class="ov-eyebrow">Kether-3 · Expedición Meridiano · día 11</p>' +
+        '<h1 class="ov-title">Ecos del <em>Vacío</em></h1>' +
+        '<p class="ov-lede">Despertaste once días después del accidente y sos el ' +
+        'único que salió de la cápsula entero. El escáner de corto alcance no ' +
+        'llega al valle: hay que subir a la cresta y plantar la antena. Lo que ' +
+        'despierta después pesa treinta y seis metros.</p>' +
+        '<dl class="ov-keys">' + KEY_ROWS + '</dl>' +
+        '<p class="ov-start">Empezar la expedición</p>' +
+        '<p class="ov-meta">calidad ' + quality + ' · ' +
+        String(renderer.info.renderer).slice(0, 58) + '</p>' +
+        '</div>';
+      overlay.hidden = false;
       overlay.style.opacity = '1';
       overlay.style.pointerEvents = 'auto';
     }
+
     function showPause() {
       overlay.innerHTML =
-        '<div style="font-size:24px;letter-spacing:7px;font-weight:300">PAUSA</div>' +
-        '<div style="opacity:.5;font-size:12px">clic para volver a la expedición</div>';
+        '<div class="ov-inner">' +
+        '<p class="ov-eyebrow">Expedición en pausa</p>' +
+        '<h1 class="ov-title">Alto</h1>' +
+        '<p class="ov-lede">El traje sigue encendido. Volvé cuando quieras.</p>' +
+        '<p class="ov-start">Retomar</p>' +
+        '</div>';
+      overlay.hidden = false;
       overlay.style.opacity = '1';
       overlay.style.pointerEvents = 'auto';
     }
+
     function hideOverlay() {
       overlay.style.opacity = '0';
       overlay.style.pointerEvents = 'none';
     }
 
+    overlay.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); overlay.click(); }
+    });
     overlay.addEventListener('click', () => {
       audio.start();
       audio.resume();
       started = true;
       paused = false;
       hideOverlay();
-      glCanvas.requestPointerLock();
       renderer.resetHistory();
+      glCanvas.focus();
+
+      // requestPointerLock devuelve una promesa en navegadores modernos, pero
+      // no en todos; se comprueba además por tiempo de espera.
+      let settled = false;
+      try {
+        const r = glCanvas.requestPointerLock();
+        if (r && typeof r.catch === 'function') {
+          r.then(() => { settled = true; }).catch(() => { settled = true; enableDragLook(); });
+        }
+      } catch (err) { enableDragLook(); settled = true; }
+      setTimeout(() => {
+        if (!settled && !pointerLocked) enableDragLook();
+      }, 400);
     });
 
     // --- bucle ---------------------------------------------------------------
@@ -294,7 +366,8 @@
 
       if (started && !paused) {
         readKeys();
-        if (keys.Fire && !photoMode) game.fire(scene.camera.pos);
+        if ((keys.Fire || fireOnce) && !photoMode) game.fire(scene.camera.pos);
+        fireOnce = false;
         game.update(dt, input, scene.camera.pos);
         clearEdges();
       } else {

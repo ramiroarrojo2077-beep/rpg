@@ -1,5 +1,10 @@
-// Empaqueta el juego en un único HTML autocontenido, sin dependencias.
-// Uso: node build.mjs   →   dist/ecos-del-vacio.html
+// Empaqueta el juego en HTML autocontenido, sin dependencias.
+//
+//   node build.mjs
+//     dist/ecos-del-vacio.html   documento completo, se abre con doble clic
+//     dist/artifact.html         mismo juego como fragmento de página, para
+//                                publicarlo hospedado (el anfitrión aporta el
+//                                <!doctype>, <head> y <body>)
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,20 +44,54 @@ const sources = ORDER.map((f) => {
   return `/* ===== ${f} ===== */\n${code}`;
 }).join('\n');
 
-const template = readFileSync(join(here, 'index.html'), 'utf8');
+const css = readFileSync(join(here, 'src', 'page-shell.css'), 'utf8');
 
-// Sustituye la lista de <script src> por un único bloque en línea.
-const bundled = template.replace(
-  /<script src="src\/[^"]+"><\/script>\s*/g,
-  '',
-).replace(
-  '</body>',
-  `<script>\n${sources}\n</script>\n</body>`,
-);
+const FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com">\n' +
+  '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
+  '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?' +
+  'family=Chakra+Petch:wght@300;600&family=IBM+Plex+Mono:wght@400;500&display=swap">';
+
+const BODY = '<div id="app"><canvas id="gl" tabindex="0"></canvas></div>';
 
 mkdirSync(join(here, 'dist'), { recursive: true });
-const out = join(here, 'dist', 'ecos-del-vacio.html');
-writeFileSync(out, bundled);
 
-const kb = (Buffer.byteLength(bundled) / 1024).toFixed(1);
-console.log(`dist/ecos-del-vacio.html — ${kb} KB, ${ORDER.length} módulos, sin dependencias externas`);
+// --- documento completo ---------------------------------------------------
+const standalone = `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ecos del Vacío</title>
+<link rel="icon" href="data:,">
+${FONTS}
+<style>
+${css}</style>
+</head>
+<body>
+${BODY}
+<script>
+${sources}
+</script>
+</body>
+</html>
+`;
+writeFileSync(join(here, 'dist', 'ecos-del-vacio.html'), standalone);
+
+// --- fragmento para publicación hospedada ---------------------------------
+// Sin <!doctype>, <html>, <head> ni <body>: los aporta el anfitrión. El <title>
+// va igual al principio, que es de donde lo lee.
+const fragment = `<title>Ecos del Vacío</title>
+${FONTS}
+<style>
+${css}</style>
+${BODY}
+<script>
+${sources}
+</script>
+`;
+writeFileSync(join(here, 'dist', 'artifact.html'), fragment);
+
+const kb = (s) => (Buffer.byteLength(s) / 1024).toFixed(1);
+console.log(`dist/ecos-del-vacio.html — ${kb(standalone)} KB (documento completo)`);
+console.log(`dist/artifact.html       — ${kb(fragment)} KB (fragmento hospedable)`);
+console.log(`${ORDER.length} módulos · sin dependencias de scripts externos`);

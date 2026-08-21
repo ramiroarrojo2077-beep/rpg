@@ -5,7 +5,7 @@
   'use strict';
 
   const M = EV.MathUtil;
-  const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+  const FONT = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
   function create(canvas) {
     const ctx = canvas.getContext('2d');
